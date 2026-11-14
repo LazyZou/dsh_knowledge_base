@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "PDF knowledge library",
-    "description": "Upload PDFs, browse the text and knowledge chunks extracted from them, and ask questions answered only from those documents.",
+    "description": "Upload PDFs, including scans: browse the extracted text and knowledge chunks, recognize scanned pages, and ask questions answered only from those documents. Up to 500 MB per file.",
     "detail": "docs/DETAIL.md"
   }
 }

@@ -50,11 +50,25 @@ window.__ModuleLoader__.load({
       refresh: '刷新',
       unnamed: '未命名文档',
       chars: '{n} 字',
+      scanned: '扫描件',
+      ocrPending: '{n} 页待识别',
+      ocrRun: '识别扫描页',
+      ocrRunning: '识别中…',
+      ocrResult: '本次识别 {n} 页，还剩 {m} 页',
+      ocrComplete: '全部扫描页已识别',
+      ocrBackendLocal: '识别：本机 Tesseract（不消耗 token）',
+      ocrBackendVision: '识别：视觉模型（本机未装 Tesseract）',
+      ocrBackendNone: '未找到识别后端：安装 Tesseract 或启用视觉工具',
+      ocrPageHint: '这一页是扫描图，识别后才有文字',
+      ocrEmptyHint: '这一页没有识别出文字',
       errPDF_ENCRYPTED: '这个 PDF 已加密，需要打开口令，暂无法解析。',
-      errPDF_NO_TEXT: '没有解析出文字。如果是扫描件（图片型 PDF），目前还不支持。',
+      errPDF_NO_TEXT: '扫描件已收录，识别文字后即可检索和提问。',
+      errOCR_UNAVAILABLE: '没有可用的识别后端：装 Tesseract，或在开启视觉的会话里运行识别。',
+      errOCR_BACKEND_UNAVAILABLE: '视觉后端暂时不可用（超时或限流），稍后重试即可。',
+      errOCR_FAILED: '这一页识别失败，可稍后重试。',
       errPDF_INVALID: '文件不是有效的 PDF。',
       errPDF_EMPTY: '文件是空的。',
-      errPDF_TOO_LARGE: '文件超过 96 MB，请拆分后再上传。',
+      errPDF_TOO_LARGE: '文件超过 500 MB，请拆分后再上传。',
       errKB_ERROR: '处理失败',
       askEmpty: '先输入问题',
       alreadyInLibrary: '《{title}》已经在知识库里了，直接为你打开。',
@@ -95,11 +109,25 @@ window.__ModuleLoader__.load({
       refresh: 'Refresh',
       unnamed: 'Untitled document',
       chars: '{n} characters',
+      scanned: 'Scan',
+      ocrPending: '{n} pages to recognize',
+      ocrRun: 'Recognize scanned pages',
+      ocrRunning: 'Recognizing…',
+      ocrResult: 'Recognized {n} page(s), {m} left',
+      ocrComplete: 'Every scanned page is recognized',
+      ocrBackendLocal: 'Recognition: local Tesseract (no tokens)',
+      ocrBackendVision: 'Recognition: vision model (Tesseract is not installed)',
+      ocrBackendNone: 'No recognition backend: install Tesseract or enable a vision tool',
+      ocrPageHint: 'This page is a scan; its text appears after recognition',
+      ocrEmptyHint: 'No text was recognized on this page',
       errPDF_ENCRYPTED: 'This PDF is encrypted and needs a password, so it cannot be parsed yet.',
-      errPDF_NO_TEXT: 'No text was extracted. Scanned (image-only) PDFs are not supported yet.',
+      errPDF_NO_TEXT: 'The scan is stored; recognize its pages to make it searchable.',
+      errOCR_UNAVAILABLE: 'No recognition backend is available: install Tesseract, or run recognition in a session with vision enabled.',
+      errOCR_BACKEND_UNAVAILABLE: 'The vision backend is unavailable right now (timeout or rate limit); try again later.',
+      errOCR_FAILED: 'This page could not be recognized; try again later.',
       errPDF_INVALID: 'That file is not a valid PDF.',
       errPDF_EMPTY: 'That file is empty.',
-      errPDF_TOO_LARGE: 'That file is larger than 96 MB; split it first.',
+      errPDF_TOO_LARGE: 'That file is larger than 500 MB; split it first.',
       errKB_ERROR: 'Processing failed',
       askEmpty: 'Type a question first',
       alreadyInLibrary: '"{title}" is already in the library — opened it instead.',
@@ -175,6 +203,13 @@ window.__ModuleLoader__.load({
       .pdfkb-source-text { font-size:12px; line-height:19px; color: var(--dsw-alias-label-tertiary); }
       .pdfkb-error { color: var(--dsw-alias-state-error-primary); font-size:13px; line-height:20px; }
       .pdfkb-notice { color: var(--dsw-alias-label-secondary); font-size:13px; line-height:20px; }
+      .pdfkb-ocr-bar { display:flex; align-items:center; justify-content:space-between; gap:12px;
+        border:1px solid var(--dsw-alias-state-warn-primary); background: var(--dsw-alias-bg-layer-2);
+        border-radius:10px; padding:10px 12px; margin-bottom:16px; font-size:12px;
+        color: var(--dsw-alias-state-warn-label); }
+      .pdfkb-scan-hint { color: var(--dsw-alias-label-tertiary); font-size:12px; margin-bottom:8px; }
+      .pdfkb-page-image { display:block; max-width:100%; border:1px solid var(--dsw-alias-border-l2);
+        border-radius:8px; background: var(--dsw-alias-bg-layer-2); }
       .pdfkb-drop { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
         background: color-mix(in srgb, var(--dsw-alias-bg-base) 82%, transparent);
         border:2px dashed var(--dsw-alias-brand-primary); border-radius:12px; font-size:14px;
@@ -240,7 +275,8 @@ window.__ModuleLoader__.load({
         h(
           'span',
           { className: 'pdfkb-doc-meta' },
-          `${format(t('pages'), { n: doc.pageCount })} · ${format(t('chunks'), { n: doc.chunkCount })}`,
+          `${format(t('pages'), { n: doc.pageCount })} · ${format(t('chunks'), { n: doc.chunkCount })}`
+            + (doc.ocrPending ? ` · ${format(t('ocrPending'), { n: doc.ocrPending })}` : ''),
         ),
         h(
           'button',
@@ -258,14 +294,27 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function ContentPane({ detail, t }) {
+    function ContentPane({ detail, t, onOcr, ocrBusy }) {
       if (!detail) return null
-      const pages = detail.pages.filter(page => page.text.trim().length > 0)
-      if (!pages.length) return h('p', { className: 'pdfkb-text' }, t('errPDF_NO_TEXT'))
+      const pageImageUrl = page => `api/pdfkb/page-image?id=${encodeURIComponent(detail.id)}&page=${page}`
+      const recognized = detail.pages.filter(page => page.text.trim().length > 0)
+      const waiting = detail.pages.filter(page => page.text.trim().length === 0 && page.hasImage)
       return h(
         'div',
         null,
-        pages.map(page =>
+        detail.ocrPending
+          ? h(
+              'div',
+              { className: 'pdfkb-ocr-bar' },
+              h('span', null, format(t('ocrPending'), { n: detail.ocrPending })),
+              h(
+                'button',
+                { className: 'pdfkb-btn', type: 'button', disabled: ocrBusy, onClick: () => onOcr(detail) },
+                ocrBusy ? t('ocrRunning') : t('ocrRun'),
+              ),
+            )
+          : null,
+        recognized.map(page =>
           h(
             'section',
             { className: 'pdfkb-page-block', key: page.page },
@@ -273,6 +322,21 @@ window.__ModuleLoader__.load({
             h('p', { className: 'pdfkb-text' }, page.text),
           ),
         ),
+        waiting.map(page =>
+          h(
+            'section',
+            { className: 'pdfkb-page-block', key: `scan-${page.page}` },
+            h('span', { className: 'pdfkb-page-tag' }, format(t('page'), { n: page.page })),
+            h('p', { className: 'pdfkb-text pdfkb-scan-hint' }, t(page.ocrStatus === 'done' ? 'ocrEmptyHint' : 'ocrPageHint')),
+            h('img', {
+              className: 'pdfkb-page-image',
+              src: pageImageUrl(page.page),
+              alt: format(t('page'), { n: page.page }),
+              loading: 'lazy',
+            }),
+          ),
+        ),
+        !recognized.length && !waiting.length ? h('p', { className: 'pdfkb-text' }, t('errPDF_NO_TEXT')) : null,
       )
     }
 
@@ -380,6 +444,8 @@ window.__ModuleLoader__.load({
       const [result, setResult] = useState(undefined)
       const [asking, setAsking] = useState(false)
       const [dragging, setDragging] = useState(false)
+      const [ocrBusy, setOcrBusy] = useState(false)
+      const [ocrInfo, setOcrInfo] = useState(undefined)
       const inputRef = useRef(null)
 
       const describe = useCallback(
@@ -397,6 +463,7 @@ window.__ModuleLoader__.load({
         if (body.ok) {
           setDocuments(body.documents ?? [])
           setTotals(body.totals ?? { documents: 0, pages: 0, chunks: 0 })
+          if (body.ocr) setOcrInfo(body.ocr)
           setError('')
         } else {
           setError(describe(body))
@@ -433,7 +500,7 @@ window.__ModuleLoader__.load({
           const body = await call(`/upload?name=${encodeURIComponent(file.name)}`, {
             method: 'POST',
             headers: { 'content-type': 'application/pdf' },
-            body: await file.arrayBuffer(),
+            body: file,
           })
           setUploading(false)
           if (!body.ok) {
@@ -468,6 +535,37 @@ window.__ModuleLoader__.load({
           await loadState()
         },
         [describe, loadState, t],
+      )
+
+      const runOcr = useCallback(
+        async doc => {
+          if (!doc?.id || ocrBusy) return
+          setOcrBusy(true)
+          setError('')
+          setNotice('')
+          const body = await call('/ocr', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: doc.id, pages: 6 }),
+          })
+          setOcrBusy(false)
+          if (!body.ok) {
+            setError(describe(body))
+            return
+          }
+          const failedPage = (body.pages ?? []).find(item => item.error)
+          if (failedPage) {
+            const code = failedPage.code ?? /^([A-Z_]+)/.exec(failedPage.error)?.[1]
+            setError(describe({ code, message: failedPage.error }))
+          } else if (body.remaining === 0) {
+            setNotice(t('ocrComplete'))
+          } else {
+            setNotice(format(t('ocrResult'), { n: body.recognized, m: body.remaining }))
+          }
+          await loadState()
+          await loadDocument(doc.id)
+        },
+        [describe, loadState, loadDocument, t, ocrBusy],
       )
 
       const ask = useCallback(async () => {
@@ -522,6 +620,13 @@ window.__ModuleLoader__.load({
             h('h1', { className: 'pdfkb-title' }, t('title')),
             h('p', { className: 'pdfkb-subtitle' }, t('subtitle')),
             h('p', { className: 'pdfkb-stats' }, stats),
+            ocrInfo
+              ? h(
+                  'p',
+                  { className: 'pdfkb-stats' },
+                  ocrInfo.tesseract ? t('ocrBackendLocal') : ocrInfo.engine === 'tesseract' ? t('ocrBackendNone') : t('ocrBackendVision'),
+                )
+              : null,
           ),
           h(
             'div',
@@ -611,7 +716,7 @@ window.__ModuleLoader__.load({
                       ? h(AskPane, { t, onAsk: () => void ask(), asking, result, error: '', question, setQuestion })
                       : detail
                         ? tab === 'content'
-                          ? h(ContentPane, { detail, t })
+                          ? h(ContentPane, { detail, t, onOcr: doc => void runOcr(doc), ocrBusy })
                           : h(KnowledgePane, { detail, t })
                         : h(
                             'div',

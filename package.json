@@ -1,9 +1,9 @@
 {
   "name": "@local/pdf-kb",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "PDF knowledge base: upload PDFs, browse extracted content and knowledge chunks, and ask questions answered from the library.",
+  "description": "PDF knowledge base: upload PDFs (including scanned ones), browse extracted content and knowledge chunks, and ask questions answered from the library.",
   "license": "MIT",
   "author": "LazyZou",
   "repository": {

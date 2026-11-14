@@ -1,0 +1,50 @@
+{
+  "name": "@local/pdf-kb",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PDF knowledge base: upload PDFs, browse extracted content and knowledge chunks, and ask questions answered from the library.",
+  "license": "MIT",
+  "author": "LazyZou",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LazyZou/dsh_knowledge_base.git"
+  },
+  "homepage": "https://github.com/LazyZou/dsh_knowledge_base#readme",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "pdf",
+    "knowledge-base",
+    "rag"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "lib",
+    "locale/*.json",
+    "docs",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}

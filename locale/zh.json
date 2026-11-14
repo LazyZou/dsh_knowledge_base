@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "PDF 知识库",
+    "description": "上传 PDF，查看解析出的正文与知识条目，并基于这些文档回答问题。",
+    "detail": "docs/DETAIL.md"
+  }
+}

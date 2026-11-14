@@ -1,0 +1,4 @@
+- insert:
+    - id: pdf-kb
+      name: '@local/pdf-kb'
+      config: {}

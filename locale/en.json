@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "PDF knowledge library",
+    "description": "Upload PDFs, browse the text and knowledge chunks extracted from them, and ask questions answered only from those documents.",
+    "detail": "docs/DETAIL.md"
+  }
+}

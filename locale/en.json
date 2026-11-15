@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "PDF knowledge library",
-    "description": "Upload PDFs (in batches, scans included), browse their text and knowledge chunks, and ask questions; imports queue in the background with visible progress.",
+    "description": "Upload PDFs (batch or scanned), browse the extracted knowledge grouped by topic, and ask questions once scans are recognized. Batch imports queue in the background with visible progress.",
     "detail": "docs/DETAIL.md"
   }
 }

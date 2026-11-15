@@ -27,7 +27,7 @@ window.__ModuleLoader__.load({
       emptyTitle: '知识库还是空的',
       emptyBody: '上传一份 PDF，解析后就能在这里查看内容、浏览知识条目，并基于它提问。',
       dropHint: '把 PDF 拖到这里',
-      total: '{docs} 份文档 · {pages} 页 · {chunks} 条知识',
+      total: '{docs} 份文档 · {pages} 页 · {topics} 个主题 · {chunks} 条知识',
       tabContent: '内容',
       tabKnowledge: '知识',
       tabAsk: '提问',
@@ -74,6 +74,15 @@ window.__ModuleLoader__.load({
       refresh: '刷新',
       unnamed: '未命名文档',
       chars: '{n} 字',
+      knowledgeFilter: '按关键词筛选知识',
+      knowledgeSummary: '{topics} 个主题 · {chunks} 条知识',
+      topicUntitled: '未分类',
+      topicMeta: '{n} 条 · 第 {a}-{b} 页',
+      topicMetaOne: '{n} 条 · 第 {p} 页',
+      knowledgeEmpty: '这份文档还没有可检索的知识（扫描件识别后才有）。',
+      knowledgeNoMatch: '没有匹配的知识条目，换个关键词试试。',
+      topicExpand: '展开',
+      topicCollapse: '收起',
       scanned: '扫描件',
       ocrPending: '{n} 页待识别',
       ocrRun: '识别扫描页',
@@ -113,7 +122,7 @@ window.__ModuleLoader__.load({
       emptyTitle: 'The library is empty',
       emptyBody: 'Upload a PDF to read its content here, browse the knowledge chunks extracted from it, and ask questions about it.',
       dropHint: 'Drop a PDF here',
-      total: '{docs} documents · {pages} pages · {chunks} chunks',
+      total: '{docs} documents · {pages} pages · {topics} topics · {chunks} chunks',
       tabContent: 'Content',
       tabKnowledge: 'Knowledge',
       tabAsk: 'Ask',
@@ -160,6 +169,15 @@ window.__ModuleLoader__.load({
       refresh: 'Refresh',
       unnamed: 'Untitled document',
       chars: '{n} characters',
+      knowledgeFilter: 'Filter knowledge by keyword',
+      knowledgeSummary: '{topics} topics · {chunks} items',
+      topicUntitled: 'Uncategorised',
+      topicMeta: '{n} items · pages {a}-{b}',
+      topicMetaOne: '{n} items · page {p}',
+      knowledgeEmpty: 'This document has no searchable knowledge yet (scanned pages gain text after recognition).',
+      knowledgeNoMatch: 'No knowledge item matches that keyword.',
+      topicExpand: 'Expand',
+      topicCollapse: 'Collapse',
       scanned: 'Scan',
       ocrPending: '{n} pages to recognize',
       ocrRun: 'Recognize scanned pages',
@@ -241,6 +259,19 @@ window.__ModuleLoader__.load({
         background: var(--dsw-alias-bg-layer-2); }
       .pdfkb-chunk-head { display:flex; gap:8px; align-items:center; margin-bottom:6px;
         font-size:11px; color: var(--dsw-alias-label-tertiary); }
+      .pdfkb-knowledge { display:flex; flex-direction:column; gap:10px; }
+      .pdfkb-knowledge-bar { display:flex; gap:10px; align-items:center; }
+      .pdfkb-filter { min-height:0; flex:1; padding:7px 10px; font-size:12px; }
+      .pdfkb-topic { border:1px solid var(--dsw-alias-border-l2); border-radius:12px; overflow:hidden;
+        background: var(--dsw-alias-bg-layer-1); }
+      .pdfkb-topic-head { display:flex; gap:8px; align-items:center; width:100%; text-align:left; cursor:pointer;
+        padding:9px 12px; background:transparent; border:0; color: var(--dsw-alias-label-primary); font-family:inherit; }
+      .pdfkb-topic-head:hover { background: var(--dsw-alias-interactive-bg-hover); }
+      .pdfkb-topic-caret { font-size:11px; color: var(--dsw-alias-label-tertiary); width:10px; }
+      .pdfkb-topic-title { font-size:13px; font-weight:600; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .pdfkb-topic-meta { font-size:11px; color: var(--dsw-alias-label-tertiary); white-space:nowrap; }
+      .pdfkb-topic-body { padding:10px 12px 2px; border-top:1px solid var(--dsw-alias-border-l1);
+        background: var(--dsw-alias-bg-base); }
       .pdfkb-ask { display:flex; flex-direction:column; gap:12px; }
       .pdfkb-input { width:100%; box-sizing:border-box; resize:vertical; min-height:76px; border-radius:10px;
         border:1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2);
@@ -457,23 +488,97 @@ window.__ModuleLoader__.load({
     }
 
     function KnowledgePane({ detail, t }) {
+      const [needle, setNeedle] = useState('')
+      const [closed, setClosed] = useState({})
       if (!detail) return null
+
+      const query = needle.trim().toLowerCase()
+      const groups = []
+      const byName = new Map()
+      for (const chunk of detail.chunks ?? []) {
+        const name = chunk.topic || ''
+        if (query && !`${name}\n${chunk.text}`.toLowerCase().includes(query)) continue
+        let group = byName.get(name)
+        if (!group) {
+          group = { name, chunks: [], chars: 0, firstPage: chunk.page, lastPage: chunk.pageEnd ?? chunk.page }
+          byName.set(name, group)
+          groups.push(group)
+        }
+        group.chunks.push(chunk)
+        group.chars += chunk.text.length
+        group.firstPage = Math.min(group.firstPage, chunk.page)
+        group.lastPage = Math.max(group.lastPage, chunk.pageEnd ?? chunk.page)
+      }
+      groups.sort((left, right) => left.firstPage - right.firstPage)
+      const total = groups.reduce((sum, group) => sum + group.chunks.length, 0)
+
+      const toggle = name => {
+        setClosed(previous => ({ ...previous, [name]: !previous[name] }))
+      }
+
       return h(
         'div',
-        null,
-        detail.chunks.map(chunk =>
-          h(
-            'article',
-            { className: 'pdfkb-chunk', key: chunk.id },
-            h(
-              'div',
-              { className: 'pdfkb-chunk-head' },
-              h('span', null, `${format(t('page'), { n: chunk.page })} · #${chunk.id}`),
-              h('span', null, format(t('chars'), { n: chunk.text.length })),
-            ),
-            h('p', { className: 'pdfkb-text' }, chunk.text),
-          ),
+        { className: 'pdfkb-knowledge' },
+        h(
+          'div',
+          { className: 'pdfkb-knowledge-bar' },
+          h('input', {
+            className: 'pdfkb-input pdfkb-filter',
+            value: needle,
+            placeholder: t('knowledgeFilter'),
+            onChange: event => setNeedle(event.target.value),
+          }),
+          h('span', { className: 'pdfkb-scroll-hint' }, format(t('knowledgeSummary'), { topics: groups.length, chunks: total })),
         ),
+        (detail.chunks ?? []).length
+          ? null
+          : h('p', { className: 'pdfkb-text' }, t('knowledgeEmpty')),
+        groups.length || !(detail.chunks ?? []).length
+          ? null
+          : h('p', { className: 'pdfkb-text' }, t('knowledgeNoMatch')),
+        groups.map(group => {
+          // Filtering implies the user is looking for matches, so keep groups open.
+          const open = Boolean(query) || !closed[group.name]
+          const meta = group.firstPage === group.lastPage
+            ? format(t('topicMetaOne'), { n: group.chunks.length, p: group.firstPage })
+            : format(t('topicMeta'), { n: group.chunks.length, a: group.firstPage, b: group.lastPage })
+          return h(
+            'section',
+            { className: 'pdfkb-topic', key: group.name || '(untitled)' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'pdfkb-topic-head',
+                'aria-expanded': open,
+                title: open ? t('topicCollapse') : t('topicExpand'),
+                onClick: () => toggle(group.name),
+              },
+              h('span', { className: 'pdfkb-topic-caret' }, open ? '▾' : '▸'),
+              h('span', { className: 'pdfkb-topic-title' }, group.name || t('topicUntitled')),
+              h('span', { className: 'pdfkb-topic-meta' }, meta),
+            ),
+            open
+              ? h(
+                  'div',
+                  { className: 'pdfkb-topic-body' },
+                  group.chunks.map(chunk =>
+                    h(
+                      'article',
+                      { className: 'pdfkb-chunk', key: chunk.id },
+                      h(
+                        'div',
+                        { className: 'pdfkb-chunk-head' },
+                        h('span', null, `${format(t('page'), { n: chunk.page })} · #${chunk.id}`),
+                        h('span', null, format(t('chars'), { n: chunk.text.length })),
+                      ),
+                      h('p', { className: 'pdfkb-text' }, chunk.text),
+                    ),
+                  ),
+                )
+              : null,
+          )
+        }),
       )
     }
 
@@ -624,7 +729,7 @@ window.__ModuleLoader__.load({
 
     function PanelPage({ t }) {
       const [documents, setDocuments] = useState([])
-      const [totals, setTotals] = useState({ documents: 0, pages: 0, chunks: 0 })
+      const [totals, setTotals] = useState({ documents: 0, pages: 0, chunks: 0, topics: 0 })
       const [selected, setSelected] = useState(undefined)
       const [detail, setDetail] = useState(undefined)
       const [tab, setTab] = useState('content')
@@ -654,7 +759,7 @@ window.__ModuleLoader__.load({
         const body = await call('/state')
         if (body.ok) {
           setDocuments(body.documents ?? [])
-          setTotals(body.totals ?? { documents: 0, pages: 0, chunks: 0 })
+          setTotals(body.totals ?? { documents: 0, pages: 0, chunks: 0, topics: 0 })
           if (body.ocr) setOcrInfo(body.ocr)
           setError('')
         } else {
@@ -867,6 +972,7 @@ window.__ModuleLoader__.load({
       const stats = format(t('total'), {
         docs: totals.documents,
         pages: totals.pages,
+        topics: totals.topics ?? 0,
         chunks: totals.chunks,
       })
 

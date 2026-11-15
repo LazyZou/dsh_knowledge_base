@@ -15,6 +15,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { KnowledgeBase } from './lib/store.mjs'
+import { topicSummary } from './lib/clean.mjs'
 import { probeTesseract, recognizePageImage, stripNonTextAnswer } from './lib/ocr.mjs'
 import { JobStore, TERMINAL, progressOf, recover } from './lib/jobs.mjs'
 
@@ -220,6 +221,7 @@ export function apply(ctx, config) {
         await jobStore.load()
         await fs.mkdir(tempDir, { recursive: true })
         if (await recover(jobStore.jobs, fileExists)) await jobStore.save()
+        await sweepTemp()
       })()
     }
     return jobsReady
@@ -229,6 +231,36 @@ export function apply(ctx, config) {
 
   function settled(item) {
     return TERMINAL.has(item.state)
+  }
+
+  /** Delete the spooled copies a job owns; a path import belongs to the caller. */
+  async function dropSpooledFiles(job) {
+    for (const item of job.items ?? []) {
+      if (!item.tempFile || item.fromPath) continue
+      await fs.rm(item.tempFile, { force: true }).catch(() => {})
+      delete item.tempFile
+    }
+  }
+
+  /**
+   * Remove spool files no job claims. A crash mid-upload (or a job deleted from
+   * an older build) would otherwise leave hundreds of megabytes in tmp/.
+   */
+  async function sweepTemp() {
+    const claimed = new Set()
+    for (const job of jobStore.jobs) {
+      for (const item of job.items ?? []) if (item.tempFile) claimed.add(path.basename(item.tempFile))
+    }
+    const names = await fs.readdir(tempDir).catch(() => [])
+    const cutoff = Date.now() - 10 * 60 * 1000
+    for (const name of names) {
+      if (!name.endsWith('.pdf') || claimed.has(name)) continue
+      const target = path.join(tempDir, name)
+      // An upload that is still streaming has no job row yet: leave fresh files.
+      const stat = await fs.stat(target).catch(() => null)
+      if (!stat || stat.mtimeMs > cutoff) continue
+      await fs.rm(target, { force: true }).catch(() => {})
+    }
   }
 
   async function finishJob(job) {
@@ -242,11 +274,7 @@ export function apply(ctx, config) {
         ? 'every file failed'
         : `${job.done} ok${job.failed ? `, ${job.failed} failed` : ''}`
     // Files spooled for a job that never ran would otherwise sit in tmp/ forever.
-    for (const item of job.items) {
-      if (item.state !== 'cancelled' || !item.tempFile || item.fromPath) continue
-      await fs.rm(item.tempFile, { force: true }).catch(() => {})
-      delete item.tempFile
-    }
+    await dropSpooledFiles({ items: job.items.filter(item => item.state === 'cancelled') })
     return jobStore.save()
   }
 
@@ -380,6 +408,7 @@ export function apply(ctx, config) {
           documents: documents.length,
           pages: documents.reduce((sum, doc) => sum + (doc.pageCount ?? 0), 0),
           chunks: documents.reduce((sum, doc) => sum + (doc.chunkCount ?? 0), 0),
+          topics: documents.reduce((sum, doc) => sum + (doc.topicCount ?? 0), 0),
           ocrPending: documents.reduce((sum, doc) => sum + (doc.ocrPending ?? 0), 0),
         },
         ocr: { engine: ocrEngine, tesseract: tesseract.available, language: tesseract.language ?? null },
@@ -422,10 +451,12 @@ export function apply(ctx, config) {
   route('/chunks', ['GET'], 'buffered', async request => {
     try {
       const id = new URL(request.url).searchParams.get('doc')
-      const chunks = id
-        ? (await kb.document(id)).chunks.map(chunk => ({ ...chunk, documentId: id }))
-        : await kb.allChunks()
-      return json({ ok: true, chunks })
+      if (id) {
+        const document = await kb.document(id)
+        return json({ ok: true, chunks: document.chunks, topics: document.topics ?? [] })
+      }
+      const chunks = await kb.allChunks()
+      return json({ ok: true, chunks, topics: topicSummary(chunks) })
     } catch (error) {
       return json(failure(error), 404)
     }
@@ -622,6 +653,8 @@ export function apply(ctx, config) {
       }
       jobStore.remove(job.id)
       await jobStore.save()
+      // Files spooled for this job are ours; leaving them behind fills tmp/.
+      await dropSpooledFiles(job)
       return json({ ok: true, removed: true })
     } catch (error) {
       return json(failure(error), 400)
@@ -687,6 +720,7 @@ export function apply(ctx, config) {
             hits: result.hits.map(hit => ({
               document: hit.document,
               page: hit.page,
+              topic: hit.topic || undefined,
               score: hit.score,
               excerpt: hit.excerpt,
             })),
@@ -699,9 +733,45 @@ export function apply(ctx, config) {
   ctx.effect(
     () =>
       ctx.tools.register({
+        name: 'kb_topics',
+        description:
+          'List how the knowledge of one PDF is grouped by topic, with the pages each topic covers. Use it to orient '
+          + 'in a long book before searching, or when the user asks what subjects a document covers. Accepts the exact '
+          + 'document title from kb_documents or its id.',
+        parameters: {
+          document: { type: 'string', required: true, description: 'Document title or id from kb_documents.' },
+        },
+        output: { schema: {}, render: renderJson },
+        isConcurrencySafe: () => true,
+        async execute(args) {
+          const wanted = String(args?.document ?? '').trim()
+          const documents = await kb.list()
+          const meta = matchDocument(documents, wanted)
+          if (!meta) {
+            return { ok: false, error: `no document matches "${wanted}"`, documents: documents.map(doc => doc.title) }
+          }
+          const document = await kb.document(meta.id)
+          return {
+            ok: true,
+            document: document.title,
+            topicCount: (document.topics ?? []).length,
+            topics: (document.topics ?? []).map(topic => ({
+              topic: topic.name || '(untitled)',
+              chunks: topic.chunkCount,
+              pages: topic.firstPage === topic.lastPage ? `${topic.firstPage}` : `${topic.firstPage}-${topic.lastPage}`,
+            })),
+          }
+        },
+      }),
+    'pdf-kb: kb_topics tool',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.tools.register({
         name: 'kb_documents',
         description:
-          'List every document stored in the user\'s PDF knowledge base with its title, page count, chunk count, '
+          'List every document stored in the user\'s PDF knowledge base with its title, page count, topic count, chunk count, '
           + 'pending scanned pages, and a short opening preview. Call this when the user asks what the knowledge base '
           + 'contains or which document covers a topic, then use kb_search or kb_read_document to look inside.',
         parameters: {},
@@ -976,14 +1046,15 @@ export function apply(ctx, config) {
       order: 1750,
       interpolate: false,
       text:
-        'The user keeps a PDF knowledge base, reachable through the kb_search, kb_documents, and kb_read_document '
-        + 'tools, and maintained through kb_add_document, kb_import, kb_ocr, kb_jobs, and kb_remove_document. When a '
-        + 'question could be answered from their documents, search that library first and cite the document title and '
-        + 'page you used. Documents listed with a non-zero `ocrPending` are scans whose pages have no text yet: call '
-        + 'kb_ocr for them before concluding the library lacks the answer. Importing several PDFs is a background job: '
-        + 'start it with kb_import and follow it with kb_jobs instead of waiting inside one call. If the search returns '
-        + 'nothing relevant, tell the user the knowledge base does not contain that knowledge, and only then offer '
-        + 'general knowledge clearly labelled as not from the library.',
+        'The user keeps a PDF knowledge base, reachable through the kb_search, kb_documents, kb_topics, and '
+        + 'kb_read_document tools, and maintained through kb_add_document, kb_import, kb_ocr, kb_jobs, and '
+        + 'kb_remove_document. When a question could be answered from their documents, search that library first and '
+        + 'cite the document title and page you used. kb_topics shows how one document is grouped by section when you '
+        + 'need to orient in a long book. Documents listed with a non-zero `ocrPending` are scans whose pages have no '
+        + 'text yet: call kb_ocr for them before concluding the library lacks the answer. Importing several PDFs is a '
+        + 'background job: start it with kb_import and follow it with kb_jobs instead of waiting inside one call. If '
+        + 'the search returns nothing relevant, tell the user the knowledge base does not contain that knowledge, and '
+        + 'only then offer general knowledge clearly labelled as not from the library.',
     }),
     'pdf-kb: prompt section',
   )

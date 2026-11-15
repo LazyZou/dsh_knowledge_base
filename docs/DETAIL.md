@@ -24,7 +24,7 @@
 - **查看任务进度**：「任务」页签列出后台导入与识别任务，显示完成比例、每份文件成功/失败、失败原因（如「文件超过 500 MB」「PDF 已加密」），可以取消进行中的任务、清除已结束的记录。
 - **查看知识**：展示从正文切分出的知识条目（每条约 900 字，带页码），这是检索与回答的真实依据。
 - **提问**：问题只在已收录的文档里检索。找到相关段落后，用原文句子组合出回答，并标注「文档标题 · 第几页」。没有命中时明确提示「知识库缺少相应知识」，而不是凭空作答。
-- **给对话里的助手使用**：注册了 `kb_search`、`kb_documents`、`kb_read_document`、`kb_add_document`、`kb_import`、`kb_ocr`、`kb_jobs`、`kb_remove_document` 十一个工具（`kb_import` 批量导入并立即返回任务 id，`kb_jobs` 查进度，`kb_groups` 列出分组，`kb_move_document` 把文档移入分组），并在系统提示中要求助手在回答文档相关问题时先查知识库、引用出处；查不到时如实说明知识库没有该知识。文档列表里 `ocrPending` 不为 0 时，助手会先调用 `kb_ocr` 再下结论。
+- **给对话里的助手使用**：注册了 `kb_search`、`kb_documents`、`kb_read_document`、`kb_add_document`、`kb_import`、`kb_ocr`、`kb_jobs`、`kb_remove_document` 十二个工具（`kb_import` 批量导入并立即返回任务 id，`kb_jobs` 查进度，`kb_groups` 列出分组，`kb_move_document` 把一篇或一批文档移入分组，`kb_delete_group` 删分组但保留文档），并在系统提示中要求助手在回答文档相关问题时先查知识库、引用出处；查不到时如实说明知识库没有该知识。文档列表里 `ocrPending` 不为 0 时，助手会先调用 `kb_ocr` 再下结论。
 
 ## 存储位置
 

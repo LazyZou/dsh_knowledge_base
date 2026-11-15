@@ -849,38 +849,95 @@ export function apply(ctx, config) {
       ctx.tools.register({
         name: 'kb_move_document',
         description:
-          'Move one PDF into a document group, or take it out of its group. A group name that does not exist yet is '
-          + 'created. Use it when the user asks to file, group, or ungroup an uploaded PDF.',
+          'Move PDFs into a document group, or take them out of their group. A group name that does not exist yet is '
+          + 'created. Pass one title or a list of titles when filing a whole shelf at once.',
         parameters: {
-          document: { type: 'string', required: true, description: 'Document title or id from kb_documents.' },
+          document: { type: 'string', description: 'One document title or id from kb_documents.' },
+          documents: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Several document titles or ids, for filing a batch in one call.',
+          },
           group: {
             type: 'string',
             required: true,
-            description: 'Group name to file the document under; an empty string removes it from its group.',
+            description: 'Group name to file them under; an empty string removes them from their group.',
           },
         },
         output: { schema: {}, render: renderJson },
         isConcurrencySafe: () => true,
         async execute(args) {
-          const wanted = String(args?.document ?? '').trim()
+          const names = [
+            String(args?.document ?? '').trim(),
+            ...(Array.isArray(args?.documents) ? args.documents.map(item => String(item ?? '').trim()) : []),
+          ].filter(Boolean)
+          if (!names.length) {
+            return { ok: false, error: 'pass document or documents' }
+          }
           const documents = await kb.list()
-          const meta = matchDocument(documents, wanted)
-          if (!meta) {
-            return { ok: false, error: `no document matches "${wanted}"`, documents: documents.map(doc => doc.title) }
+          const groupName = String(args?.group ?? '').trim()
+          let target = { id: '', name: '' }
+          let createdGroup = false
+          if (groupName) {
+            const groups = await kb.listGroups()
+            const found = groups.find(item => item.name.toLowerCase() === groupName.toLowerCase())
+            if (found) {
+              target = found
+            } else {
+              const fresh = await kb.createGroup(groupName)
+              target = { id: fresh.id, name: fresh.name }
+              createdGroup = true
+            }
           }
-          const name = String(args?.group ?? '').trim()
-          if (!name) {
-            const cleared = await kb.assignGroup(meta.id, '')
-            return { ok: true, document: cleared.title, group: '', message: 'the document is ungrouped again' }
+          const moved = []
+          const missing = []
+          for (const wanted of names) {
+            const meta = matchDocument(documents, wanted)
+            if (!meta) {
+              missing.push(wanted)
+              continue
+            }
+            await kb.assignGroup(meta.id, target.id)
+            moved.push(meta.title)
           }
-          const groups = await kb.listGroups()
-          const found = groups.find(item => item.name.toLowerCase() === name.toLowerCase())
-          const group = found ?? (await kb.createGroup(name))
-          await kb.assignGroup(meta.id, group.id)
-          return { ok: true, document: meta.title, group: group.name, created: !found }
+          return {
+            ok: missing.length === 0,
+            moved,
+            missing,
+            group: target.name,
+            createdGroup,
+            message: groupName ? undefined : 'the documents are ungrouped again',
+            documents: missing.length ? documents.map(doc => doc.title) : undefined,
+          }
         },
       }),
     'pdf-kb: kb_move_document tool',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.tools.register({
+        name: 'kb_delete_group',
+        description:
+          'Delete one document group. The PDFs inside it are kept and fall back to ungrouped, so this never removes '
+          + 'documents. Use it when the user asks to remove or clean up a group.',
+        parameters: {
+          group: { type: 'string', required: true, description: 'Group name as returned by kb_groups.' },
+        },
+        output: { schema: {}, render: renderJson },
+        isConcurrencySafe: () => true,
+        async execute(args) {
+          const name = String(args?.group ?? '').trim()
+          const groups = await kb.listGroups()
+          const found = groups.find(item => item.name.toLowerCase() === name.toLowerCase())
+          if (!found) {
+            return { ok: false, error: `no group named "${name}"`, groups: groups.map(item => item.name) }
+          }
+          const result = await kb.deleteGroup(found.id)
+          return { ok: true, group: found.name, ungrouped: result.moved }
+        },
+      }),
+    'pdf-kb: kb_delete_group tool',
   )
 
   ctx.effect(

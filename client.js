@@ -92,6 +92,7 @@ window.__ModuleLoader__.load({
       errOCR_BACKEND_UNAVAILABLE: '视觉后端暂时不可用（超时或限流），稍后重试即可。',
       errOCR_FAILED: '这一页识别失败，可稍后重试。',
       errPDF_INVALID: '文件不是有效的 PDF。',
+      errNotPdf: '这些文件不是 PDF，已跳过。',
       errPDF_EMPTY: '文件是空的。',
       errPDF_TOO_LARGE: '文件超过 500 MB，请拆分后再上传。',
       errKB_ERROR: '处理失败',
@@ -176,6 +177,7 @@ window.__ModuleLoader__.load({
       errOCR_BACKEND_UNAVAILABLE: 'The vision backend is unavailable right now (timeout or rate limit); try again later.',
       errOCR_FAILED: 'This page could not be recognized; try again later.',
       errPDF_INVALID: 'That file is not a valid PDF.',
+      errNotPdf: 'Those files are not PDFs, so nothing was queued.',
       errPDF_EMPTY: 'That file is empty.',
       errPDF_TOO_LARGE: 'That file is larger than 500 MB; split it first.',
       errKB_ERROR: 'Processing failed',
@@ -703,8 +705,13 @@ window.__ModuleLoader__.load({
 
       const upload = useCallback(
         async fileList => {
-          const files = Array.from(fileList ?? []).filter(file => file && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)))
-          if (!files.length) return
+          const picked = Array.from(fileList ?? [])
+          const files = picked.filter(file => file && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)))
+          if (!files.length) {
+            // A button that swallows the click looks broken, so name the reason.
+            if (picked.length) setError(t('errNotPdf'))
+            return
+          }
           setError('')
           setNotice('')
           setTab('tasks')
@@ -899,7 +906,9 @@ window.__ModuleLoader__.load({
               multiple: true,
               style: { display: 'none' },
               onChange: event => {
-                const picked = event.target.files
+                // Snapshot first: assigning `value` empties this live FileList, so reading
+                // it inside upload() would hand back nothing and the button would look dead.
+                const picked = Array.from(event.target.files ?? [])
                 event.target.value = ''
                 void upload(picked)
               },

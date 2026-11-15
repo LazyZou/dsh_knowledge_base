@@ -56,6 +56,8 @@ window.__ModuleLoader__.load({
       ocrRunning: '识别中…',
       ocrResult: '本次识别 {n} 页，还剩 {m} 页',
       ocrComplete: '全部扫描页已识别',
+      ocrStop: '停止',
+      ocrStopped: '已停止，还剩 {m} 页',
       ocrBackendLocal: '识别：本机 Tesseract（不消耗 token）',
       ocrBackendVision: '识别：视觉模型（本机未装 Tesseract）',
       ocrBackendNone: '未找到识别后端：安装 Tesseract 或启用视觉工具',
@@ -115,6 +117,8 @@ window.__ModuleLoader__.load({
       ocrRunning: 'Recognizing…',
       ocrResult: 'Recognized {n} page(s), {m} left',
       ocrComplete: 'Every scanned page is recognized',
+      ocrStop: 'Stop',
+      ocrStopped: 'Stopped with {m} page(s) left',
       ocrBackendLocal: 'Recognition: local Tesseract (no tokens)',
       ocrBackendVision: 'Recognition: vision model (Tesseract is not installed)',
       ocrBackendNone: 'No recognition backend: install Tesseract or enable a vision tool',
@@ -148,6 +152,8 @@ window.__ModuleLoader__.load({
         cursor:pointer; font-family:inherit; white-space:nowrap; }
       .pdfkb-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
       .pdfkb-btn:disabled { opacity:.55; cursor:default; }
+      .pdfkb-btn-quiet { background:transparent; border-color:var(--dsw-alias-border-l3);
+        color: var(--dsw-alias-label-secondary); }
       .pdfkb-btn-primary { background: var(--dsw-alias-button-primary-fill); border-color:transparent;
         color: var(--dsw-alias-label-primary-foreground); }
       .pdfkb-btn-primary:hover:not(:disabled) { background: var(--dsw-alias-button-primary-hover); }
@@ -294,7 +300,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function ContentPane({ detail, t, onOcr, ocrBusy }) {
+    function ContentPane({ detail, t, onOcr, onStopOcr, ocrBusy }) {
       if (!detail) return null
       const pageImageUrl = page => `api/pdfkb/page-image?id=${encodeURIComponent(detail.id)}&page=${page}`
       const recognized = detail.pages.filter(page => page.text.trim().length > 0)
@@ -312,6 +318,13 @@ window.__ModuleLoader__.load({
                 { className: 'pdfkb-btn', type: 'button', disabled: ocrBusy, onClick: () => onOcr(detail) },
                 ocrBusy ? t('ocrRunning') : t('ocrRun'),
               ),
+              ocrBusy
+                ? h(
+                    'button',
+                    { className: 'pdfkb-btn pdfkb-btn-quiet', type: 'button', onClick: () => onStopOcr() },
+                    t('ocrStop'),
+                  )
+                : null,
             )
           : null,
         recognized.map(page =>
@@ -447,6 +460,7 @@ window.__ModuleLoader__.load({
       const [ocrBusy, setOcrBusy] = useState(false)
       const [ocrInfo, setOcrInfo] = useState(undefined)
       const inputRef = useRef(null)
+      const ocrStopRef = useRef(false)
 
       const describe = useCallback(
         body => {
@@ -540,32 +554,50 @@ window.__ModuleLoader__.load({
       const runOcr = useCallback(
         async doc => {
           if (!doc?.id || ocrBusy) return
+          ocrStopRef.current = false
           setOcrBusy(true)
           setError('')
-          setNotice('')
-          const body = await call('/ocr', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: doc.id, pages: 20 }),
-          })
-          setOcrBusy(false)
-          if (!body.ok) {
-            setError(describe(body))
-            return
+          setNotice(t('ocrRunning'))
+          // Keep taking batches until the document is done: a 400-page scan is
+          // dozens of batches, and nobody wants to click 40 times.
+          let recognized = 0
+          let remaining = Number(doc.ocrPending) || 0
+          try {
+            while (!ocrStopRef.current) {
+              const body = await call('/ocr', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ id: doc.id, pages: 40 }),
+              })
+              if (!body.ok) {
+                setError(describe(body))
+                return
+              }
+              recognized += Number(body.recognized) || 0
+              remaining = Number(body.remaining) || 0
+              const failedPage = (body.pages ?? []).find(item => item.error)
+              if (failedPage) {
+                const code = failedPage.code ?? /^([A-Z_]+)/.exec(failedPage.error)?.[1]
+                setError(describe({ code, message: failedPage.error }))
+                break
+              }
+              setNotice(
+                remaining === 0 ? t('ocrComplete') : format(t('ocrResult'), { n: recognized, m: remaining }),
+              )
+              if (remaining === 0) break
+              await loadState()
+              await loadDocument(doc.id)
+            }
+            if (ocrStopRef.current && remaining > 0) {
+              setNotice(format(t('ocrStopped'), { m: remaining }))
+            }
+          } finally {
+            setOcrBusy(false)
+            await loadState()
+            await loadDocument(doc.id)
           }
-          const failedPage = (body.pages ?? []).find(item => item.error)
-          if (failedPage) {
-            const code = failedPage.code ?? /^([A-Z_]+)/.exec(failedPage.error)?.[1]
-            setError(describe({ code, message: failedPage.error }))
-          } else if (body.remaining === 0) {
-            setNotice(t('ocrComplete'))
-          } else {
-            setNotice(format(t('ocrResult'), { n: body.recognized, m: body.remaining }))
-          }
-          await loadState()
-          await loadDocument(doc.id)
         },
-        [describe, loadState, loadDocument, t, ocrBusy],
+        [describe, loadState, loadDocument, t, ocrBusy, ocrStopRef],
       )
 
       const ask = useCallback(async () => {
@@ -716,7 +748,15 @@ window.__ModuleLoader__.load({
                       ? h(AskPane, { t, onAsk: () => void ask(), asking, result, error: '', question, setQuestion })
                       : detail
                         ? tab === 'content'
-                          ? h(ContentPane, { detail, t, onOcr: doc => void runOcr(doc), ocrBusy })
+                          ? h(ContentPane, {
+                              detail,
+                              t,
+                              onOcr: doc => void runOcr(doc),
+                              onStopOcr: () => {
+                                ocrStopRef.current = true
+                              },
+                              ocrBusy,
+                            })
                           : h(KnowledgePane, { detail, t })
                         : h(
                             'div',

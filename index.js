@@ -231,7 +231,7 @@ export function apply(ctx, config) {
     return TERMINAL.has(item.state)
   }
 
-  function finishJob(job) {
+  async function finishJob(job) {
     const cancelled = job.cancelRequested
     const nothingSucceeded = job.done === 0 && job.failed > 0
     job.state = cancelled ? 'cancelled' : nothingSucceeded ? 'failed' : 'done'
@@ -241,6 +241,12 @@ export function apply(ctx, config) {
       : nothingSucceeded
         ? 'every file failed'
         : `${job.done} ok${job.failed ? `, ${job.failed} failed` : ''}`
+    // Files spooled for a job that never ran would otherwise sit in tmp/ forever.
+    for (const item of job.items) {
+      if (item.state !== 'cancelled' || !item.tempFile || item.fromPath) continue
+      await fs.rm(item.tempFile, { force: true }).catch(() => {})
+      delete item.tempFile
+    }
     return jobStore.save()
   }
 

@@ -677,17 +677,25 @@ window.__ModuleLoader__.load({
         return body
       }, [])
 
+      const wasBusyRef = useRef(false)
       useEffect(() => {
         void loadJobs()
         // Poll while the panel is open: jobs keep running Host-side, so the list
         // has to catch up on work that finished after the tab was hidden.
         const timer = setInterval(() => {
-          void loadJobs().then(body => {
-            if (!body?.active) void loadState()
+          void loadJobs().then(async body => {
+            const busy = Boolean(body?.active)
+            if (!busy) {
+              await loadState()
+              // A finished job may have added text to the open document (OCR writes page
+              // text in place), so the detail pane has to be refetched once work settles.
+              if (wasBusyRef.current && selected) void loadDocument(selected)
+            }
+            wasBusyRef.current = busy
           })
         }, 2500)
         return () => clearInterval(timer)
-      }, [loadJobs, loadState])
+      }, [loadJobs, loadState, loadDocument, selected])
 
       useEffect(() => {
         if (!selected && documents.length) void loadDocument(documents[0].id)

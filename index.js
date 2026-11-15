@@ -900,15 +900,12 @@ export function apply(ctx, config) {
             await kb.assignGroup(meta.id, target.id)
             moved.push(meta.title)
           }
-          return {
-            ok: missing.length === 0,
-            moved,
-            missing,
-            group: target.name,
-            createdGroup,
-            message: groupName ? undefined : 'the documents are ungrouped again',
-            documents: missing.length ? documents.map(doc => doc.title) : undefined,
-          }
+          // Undefined fields would make the tool result lossless-JSON-invalid, so the
+          // optional keys are only added when they carry information.
+          const result = { ok: missing.length === 0, moved, missing, group: target.name, createdGroup }
+          if (!groupName) result.message = 'the documents are ungrouped again'
+          if (missing.length) result.documents = documents.map(doc => doc.title)
+          return result
         },
       }),
     'pdf-kb: kb_move_document tool',

@@ -1,6 +1,6 @@
 {
   "name": "@local/pdf-kb",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "description": "PDF knowledge base: upload PDFs (including scanned ones), browse extracted content and knowledge chunks, and ask questions answered from the library.",

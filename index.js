@@ -16,6 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { KnowledgeBase } from './lib/store.mjs'
 import { probeTesseract, recognizePageImage, stripNonTextAnswer } from './lib/ocr.mjs'
+import { JobStore, TERMINAL, progressOf, recover } from './lib/jobs.mjs'
 
 export const name = 'pdf-kb'
 export const inject = ['connection', 'tools', 'systemPrompt']
@@ -76,9 +77,9 @@ async function hashFile(target) {
 }
 
 /** Collect the upload body into a temp file, rejecting anything over the cap. */
-async function spoolUpload(request, tempDir) {
+async function spoolUpload(request, tempDir, target) {
   await fs.mkdir(tempDir, { recursive: true })
-  const temp = path.join(tempDir, `${Date.now().toString(36)}-${crypto.randomBytes(6).toString('hex')}.pdf`)
+  const temp = target ?? path.join(tempDir, `${Date.now().toString(36)}-${crypto.randomBytes(6).toString('hex')}.pdf`)
   const handle = await fs.open(temp, 'w')
   let size = 0
   try {
@@ -191,6 +192,162 @@ export function apply(ctx, config) {
     pages.sort((a, b) => a.page - b.page)
     const document = await kb.document(id)
     return { ok: true, recognized, failed, empty, remaining: document.ocrPending, pages, done: document.ocrPending === 0 }
+  }
+
+  // ---- Background jobs ---------------------------------------------------
+  // A batch of PDFs is imported by a single queue that survives refreshes and
+  // restarts, so the panel can show progress even after it is closed.
+  const jobStore = new JobStore(dataDir)
+  let jobsReady
+  let jobRunning = false
+
+  const fileExists = async target => {
+    try {
+      await fs.access(target)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** Load persisted jobs once and re-queue whatever a restart interrupted. */
+  function ensureJobs() {
+    if (!jobsReady) {
+      jobsReady = (async () => {
+        await jobStore.load()
+        await fs.mkdir(tempDir, { recursive: true })
+        if (await recover(jobStore.jobs, fileExists)) await jobStore.save()
+      })()
+    }
+    return jobsReady
+  }
+
+  const jobView = job => ({ ...job, progress: progressOf(job) })
+
+  function settled(item) {
+    return TERMINAL.has(item.state)
+  }
+
+  function finishJob(job) {
+    const cancelled = job.cancelRequested
+    const nothingSucceeded = job.done === 0 && job.failed > 0
+    job.state = cancelled ? 'cancelled' : nothingSucceeded ? 'failed' : 'done'
+    job.finishedAt = new Date().toISOString()
+    job.message = cancelled
+      ? 'cancelled'
+      : nothingSucceeded
+        ? 'every file failed'
+        : `${job.done} ok${job.failed ? `, ${job.failed} failed` : ''}`
+    return jobStore.save()
+  }
+
+  /**
+   * Recognize every pending page of one document, batch by batch, while keeping
+   * the job item's counters current. Stops on cancellation or when a batch makes
+   * no progress at all (an unavailable backend must not spin forever).
+   */
+  async function recognizeAllPages(job, item, documentId) {
+    let remaining = Number(item.remaining) || 0
+    let stall = 0
+    while (remaining > 0) {
+      if (job.cancelRequested) return remaining
+      const before = remaining
+      const batch = await recognizeDocument(documentId, 40)
+      item.recognized = (Number(item.recognized) || 0) + (Number(batch.recognized) || 0)
+      item.remaining = Number(batch.remaining) || 0
+      remaining = item.remaining
+      await jobStore.touch(job)
+      if (remaining >= before) {
+        stall += 1
+        if (stall >= 2) return remaining
+      } else {
+        stall = 0
+      }
+    }
+    return remaining
+  }
+
+  async function runJobItem(job, item) {
+    item.state = 'running'
+    await jobStore.touch(job)
+    try {
+      if (job.kind === 'import') {
+        const buffer = await fs.readFile(item.tempFile)
+        const document = await kb.add({ buffer, fileName: item.name })
+        item.documentId = document.id
+        item.documentTitle = document.title
+        item.pages = document.pageCount
+        item.remaining = document.ocrPending
+        job.done += 1
+        if (job.autoOcr && document.ocrPending > 0) {
+          await recognizeAllPages(job, item, document.id)
+        }
+        item.state = 'done'
+      } else {
+        const remaining = await recognizeAllPages(job, item, item.documentId)
+        item.state = job.cancelRequested ? 'cancelled' : 'done'
+        if (remaining > 0 && !job.cancelRequested) item.message = `${remaining} page(s) left`
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      item.state = 'failed'
+      item.error = message
+      item.code = /^([A-Z_]+):/.exec(message)?.[1] ?? 'KB_ERROR'
+      job.failed += 1
+    } finally {
+      if (job.kind === 'import' && item.tempFile && !item.fromPath) {
+        // Only spooled uploads are ours to delete: a path import belongs to the user.
+        await fs.rm(item.tempFile, { force: true }).catch(() => {})
+      }
+      delete item.tempFile
+      await jobStore.touch(job)
+    }
+  }
+
+  /** Drain every unfinished job in creation order. Safe to call repeatedly. */
+  async function runJobs() {
+    await ensureJobs()
+    if (jobRunning) return
+    jobRunning = true
+    try {
+      for (;;) {
+        const job = jobStore.jobs
+          .filter(entry => !TERMINAL.has(entry.state))
+          .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))[0]
+        if (!job) break
+        job.state = 'running'
+        await jobStore.touch(job)
+        for (const item of [...job.items].sort((a, b) => a.index - b.index)) {
+          if (settled(item)) continue
+          if (job.cancelRequested) {
+            item.state = 'cancelled'
+            continue
+          }
+          if (job.kind === 'import' && !item.uploaded) continue
+          await runJobItem(job, item)
+        }
+        const unfinished = job.items.filter(item => !settled(item))
+        if (!unfinished.length) {
+          await finishJob(job)
+          continue
+        }
+        if (!job.cancelRequested && job.kind === 'import' && unfinished.every(item => !item.uploaded)) {
+          // Still waiting for the browser to finish sending the files.
+          await jobStore.touch(job)
+          break
+        }
+        for (const item of unfinished) item.state = 'cancelled'
+        await finishJob(job)
+      }
+    } catch {
+      // A queue failure must never take the route down; items keep their state.
+    } finally {
+      jobRunning = false
+    }
+  }
+
+  const kickJobs = () => {
+    void runJobs().catch(() => {})
   }
 
   // ---- HTTP routes -------------------------------------------------------
@@ -326,6 +483,148 @@ export function apply(ctx, config) {
       })
     } catch (error) {
       return json(failure(error), 404)
+    }
+  })
+
+  // ---- Background job routes ---------------------------------------------
+  route('/jobs/import', ['POST'], 'buffered', async request => {
+    try {
+      await ensureJobs()
+      const body = await request.json().catch(() => ({}))
+      const files = Array.isArray(body?.files) ? body.files : []
+      const wanted = files
+        .map(file => ({ name: String(file?.name ?? 'document.pdf'), size: Number(file?.size) || 0 }))
+        .filter(file => file.name)
+        .slice(0, 100)
+      if (!wanted.length) return json({ ok: false, code: 'KB_BAD_REQUEST', message: 'no files' }, 400)
+      const tooBig = wanted.find(file => file.size > MAX_UPLOAD_BYTES)
+      if (tooBig) {
+        return json({ ok: false, code: 'PDF_TOO_LARGE', message: `${tooBig.name} exceeds ${MAX_UPLOAD_LABEL}` }, 413)
+      }
+      const job = jobStore.create({
+        kind: 'import',
+        title: wanted.length === 1 ? wanted[0].name : `${wanted.length} 个 PDF`,
+        items: wanted,
+      })
+      job.autoOcr = body?.autoOcr !== false
+      await jobStore.touch(job)
+      kickJobs()
+      return json({ ok: true, job: jobView(job) })
+    } catch (error) {
+      return json(failure(error), 400)
+    }
+  })
+
+  route('/job-file', ['POST'], 'streaming', async request => {
+    let temp
+    try {
+      await ensureJobs()
+      const url = new URL(request.url)
+      const jobId = url.searchParams.get('job') ?? ''
+      const index = Number(url.searchParams.get('index') ?? -1)
+      const name = url.searchParams.get('name') ?? undefined
+      const job = jobStore.get(jobId)
+      if (!job) return json({ ok: false, code: 'KB_BAD_REQUEST', message: 'unknown job' }, 404)
+      const item = job.items.find(entry => entry.index === index)
+      if (!item) return json({ ok: false, code: 'KB_BAD_REQUEST', message: 'unknown file' }, 404)
+      if (name) item.name = name
+      temp = path.join(tempDir, `job-${job.id}-${item.index}.pdf`)
+      const spooled = await spoolUpload(request, tempDir, temp)
+      temp = spooled.temp
+      if (!spooled.size) return json({ ok: false, code: 'PDF_EMPTY', message: 'empty upload' }, 400)
+      item.uploaded = true
+      item.size = spooled.size
+      item.tempFile = temp
+      item.state = 'uploaded'
+      await jobStore.touch(job)
+      kickJobs()
+      return json({ ok: true, job: jobView(job) })
+    } catch (error) {
+      if (temp) await fs.rm(temp, { force: true }).catch(() => {})
+      return json(failure(error), error?.status === 413 ? 413 : 400)
+    }
+  })
+
+  route('/jobs', ['GET'], 'buffered', async () => {
+    try {
+      await ensureJobs()
+      const jobs = jobStore.list().map(jobView)
+      return json({ ok: true, jobs, active: jobs.filter(job => !TERMINAL.has(job.state)).length })
+    } catch (error) {
+      return json(failure(error), 500)
+    }
+  })
+
+  route('/job', ['GET'], 'buffered', async request => {
+    try {
+      await ensureJobs()
+      const id = new URL(request.url).searchParams.get('id') ?? ''
+      const job = jobStore.get(id)
+      if (!job) return json({ ok: false, code: 'KB_BAD_REQUEST', message: 'unknown job' }, 404)
+      return json({ ok: true, job: jobView(job) })
+    } catch (error) {
+      return json(failure(error), 500)
+    }
+  })
+
+  route('/job-cancel', ['POST'], 'buffered', async request => {
+    try {
+      await ensureJobs()
+      const body = await request.json().catch(() => ({}))
+      const job = jobStore.get(String(body?.id ?? ''))
+      if (!job) return json({ ok: false, code: 'KB_BAD_REQUEST', message: 'unknown job' }, 404)
+      job.cancelRequested = true
+      await jobStore.touch(job)
+      kickJobs()
+      return json({ ok: true, job: jobView(job) })
+    } catch (error) {
+      return json(failure(error), 400)
+    }
+  })
+
+  route('/job-delete', ['POST'], 'buffered', async request => {
+    try {
+      await ensureJobs()
+      const body = await request.json().catch(() => ({}))
+      const job = jobStore.get(String(body?.id ?? ''))
+      if (!job) return json({ ok: true, removed: false })
+      if (!TERMINAL.has(job.state)) {
+        return json({ ok: false, code: 'KB_BAD_REQUEST', message: 'cancel the job first' }, 400)
+      }
+      jobStore.remove(job.id)
+      await jobStore.save()
+      return json({ ok: true, removed: true })
+    } catch (error) {
+      return json(failure(error), 400)
+    }
+  })
+
+  route('/jobs/ocr', ['POST'], 'buffered', async request => {
+    try {
+      await ensureJobs()
+      const body = await request.json().catch(() => ({}))
+      const documents = await kb.list()
+      const document = matchDocument(documents, body?.id ?? body?.document)
+      if (!document) return json({ ok: false, code: 'KB_BAD_REQUEST', message: 'unknown document' }, 404)
+      const pending = Number(document.ocrPending) || 0
+      if (!pending) return json({ ok: true, job: null, message: 'nothing to recognize' })
+      const job = jobStore.create({
+        kind: 'ocr',
+        title: document.title,
+        items: [{ name: document.title }],
+      })
+      const item = job.items[0]
+      item.documentId = document.id
+      item.documentTitle = document.title
+      item.pages = pending
+      item.remaining = pending
+      item.state = 'uploaded'
+      item.uploaded = true
+      await jobStore.touch(job)
+      kickJobs()
+      return json({ ok: true, job: jobView(job) })
+    } catch (error) {
+      return json(failure(error), 400)
     }
   })
 
@@ -512,6 +811,108 @@ export function apply(ctx, config) {
   ctx.effect(
     () =>
       ctx.tools.register({
+        name: 'kb_import',
+        description:
+          'Queue several PDF files from this machine for import in the background, then report progress. The queue '
+          + 'keeps running after the call returns (it is visible in the PDF library panel), so use kb_jobs to check on '
+          + 'it. Scanned files are recognized as part of the import unless recognize is false. Use this when the user '
+          + 'names more than one PDF to add at once.',
+        parameters: {
+          paths: { type: 'array', required: true, description: 'Absolute paths of the PDF files to import.' },
+          recognize: { type: 'boolean', description: 'Also recognize scanned pages; defaults to true.' },
+        },
+        output: { schema: {}, render: renderJson },
+        isConcurrencySafe: () => false,
+        async execute(args) {
+          await ensureJobs()
+          const paths = (Array.isArray(args?.paths) ? args.paths : []).map(String).filter(Boolean).slice(0, 100)
+          if (!paths.length) return { ok: false, error: 'no paths given' }
+          const files = []
+          const missing = []
+          for (const target of paths) {
+            try {
+              const stat = await fs.stat(target)
+              if (!stat.isFile()) {
+                missing.push(target)
+                continue
+              }
+              if (stat.size > MAX_UPLOAD_BYTES) {
+                return { ok: false, code: 'PDF_TOO_LARGE', error: `${path.basename(target)} exceeds ${MAX_UPLOAD_LABEL}` }
+              }
+              files.push({ name: path.basename(target), path: target, size: stat.size })
+            } catch {
+              missing.push(target)
+            }
+          }
+          if (!files.length) return { ok: false, error: 'none of those paths exist', missing }
+          const job = jobStore.create({ kind: 'import', title: files.length === 1 ? files[0].name : `${files.length} 个 PDF`, items: files })
+          job.autoOcr = args?.recognize !== false
+          for (const [index, file] of files.entries()) {
+            const item = job.items[index]
+            item.uploaded = true
+            item.state = 'uploaded'
+            item.size = file.size
+            item.tempFile = file.path
+            item.fromPath = true
+          }
+          await jobStore.touch(job)
+          kickJobs()
+          return { ok: true, job: jobView(job), missing, hint: 'call kb_jobs to follow progress' }
+        },
+      }),
+    'pdf-kb: kb_import tool',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.tools.register({
+        name: 'kb_jobs',
+        description:
+          'Report the background import and recognition jobs of the PDF knowledge base: each job\'s state, how many '
+          + 'files or pages are done, and any per-file error. Call this when the user asks how an import is going or '
+          + 'whether their uploads finished.',
+        parameters: {
+          job: { type: 'string', description: 'Optional job id; omit for every recent job.' },
+        },
+        output: { schema: {}, render: renderJson },
+        isConcurrencySafe: () => true,
+        async execute(args) {
+          await ensureJobs()
+          const wanted = String(args?.job ?? '').trim()
+          if (wanted) {
+            const job = jobStore.get(wanted)
+            if (!job) return { ok: false, error: `no job matches "${wanted}"`, jobs: jobStore.list().map(entry => entry.id) }
+            return { ok: true, job: jobView(job) }
+          }
+          const jobs = jobStore.list().map(jobView)
+          return {
+            ok: true,
+            active: jobs.filter(job => !TERMINAL.has(job.state)).length,
+            jobs: jobs.map(job => ({
+              id: job.id,
+              kind: job.kind,
+              title: job.title,
+              state: job.state,
+              done: job.progress.done,
+              total: job.progress.total,
+              failed: job.failed,
+              items: job.items.map(item => ({
+                name: item.name,
+                state: item.state,
+                documentId: item.documentId ?? null,
+                // An empty string rather than undefined: tool values must be lossless JSON.
+                error: item.error || '',
+              })),
+            })),
+          }
+        },
+      }),
+    'pdf-kb: kb_jobs tool',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.tools.register({
         name: 'kb_remove_document',
         description:
           'Remove one PDF, together with every knowledge chunk extracted from it, from the user\'s knowledge base. '
@@ -547,12 +948,13 @@ export function apply(ctx, config) {
       interpolate: false,
       text:
         'The user keeps a PDF knowledge base, reachable through the kb_search, kb_documents, and kb_read_document '
-        + 'tools, and maintained through kb_add_document, kb_ocr, and kb_remove_document. When a question could be '
-        + 'answered from their documents, search that library first and cite the document title and page you used. '
-        + 'Documents listed with a non-zero `ocrPending` are scans whose pages have no text yet: call kb_ocr for them '
-        + 'before concluding the library lacks the answer. If the search returns nothing relevant, tell the user the '
-        + 'knowledge base does not contain that knowledge, and only then offer general knowledge clearly labelled as '
-        + 'not from the library.',
+        + 'tools, and maintained through kb_add_document, kb_import, kb_ocr, kb_jobs, and kb_remove_document. When a '
+        + 'question could be answered from their documents, search that library first and cite the document title and '
+        + 'page you used. Documents listed with a non-zero `ocrPending` are scans whose pages have no text yet: call '
+        + 'kb_ocr for them before concluding the library lacks the answer. Importing several PDFs is a background job: '
+        + 'start it with kb_import and follow it with kb_jobs instead of waiting inside one call. If the search returns '
+        + 'nothing relevant, tell the user the knowledge base does not contain that knowledge, and only then offer '
+        + 'general knowledge clearly labelled as not from the library.',
     }),
     'pdf-kb: prompt section',
   )

@@ -15,8 +15,11 @@
 | 内容 | 逐页查看解析出的正文，用来核对解析是否符合预期 |
 | 知识 | 查看真正参与检索的知识条目（分块后的片段）及其来源页 |
 | 提问 | 输入问题，得到基于知识库的答案并标注出处；库里没有相关内容时明确提示 |
+| 任务 | 后台任务列表：批量导入与扫描件识别的进度、成功/失败数量、可取消或清除 |
 
-扫描件（图片型 PDF）也能导入：页面图像会保存下来并标记为「待识别」，点一次「识别扫描页」后自动连续分批识别，识别出的文字直接参与检索与提问。
+批量上传：一次选择（或拖入）多个 PDF，面板会创建一个后台任务，逐个把文件送到宿主进程排队解析；解析在后台进行，关掉面板、切到别的页面都不会中断，回到「任务」页签即可看进度。单文件也会走同一条队列，界面上只是任务里只有一个文件。
+
+扫描件（图片型 PDF）也能导入：页面图像会保存下来并标记为「待识别」，点一次「识别扫描页」后交给后台任务连续分批识别（每批 40 页），识别出的文字直接参与检索与提问。
 
 对话里的工具：
 
@@ -26,7 +29,9 @@
 | `kb_documents` | 列出当前知识库里的文档（含待识别扫描页数） |
 | `kb_read_document` | 读取某篇文档（可按页码）的正文 |
 | `kb_add_document` | 用本机绝对路径把一份 PDF 加入知识库（支持扫描件） |
+| `kb_import` | 用本机路径**批量**导入 PDF，交给后台队列，立即返回任务 id |
 | `kb_ocr` | 识别某篇文档的扫描页，分批推进并报告剩余页数 |
+| `kb_jobs` | 查看后台导入/识别任务的进度与失败原因 |
 | `kb_remove_document` | 从知识库删除一篇文档 |
 
 ## 安装
@@ -60,10 +65,10 @@ git clone https://github.com/LazyZou/dsh_knowledge_base.git
 ## 使用
 
 1. 点左侧边栏的 **PDF 知识库**。
-2. 把 PDF 拖到面板里，或点「上传 PDF」。解析进度会显示在按钮上；重复上传同一文件会自动去重（按内容哈希）。
+2. 把 PDF 拖到面板里（可多选），或点「批量上传 PDF」。文件先传上去，再在后台排队解析：进度在 **任务** 页签里，每份文件显示成功/失败；重复上传同一文件会自动去重（按内容哈希）。
 3. 切到 **内容** 核对正文、切到 **知识** 看分块，任何一块都能看到它来自第几页。
 4. 切到 **提问** 问一个文档里有的问题 → 应给出答案并标注 `[文档标题 · p.页码]`；再问一个文档里没有的 → 应提示「知识库缺少相应知识」。
-5. 上传扫描件时，页面会以「待识别」入库：在 **内容** 页点一次「识别扫描页」，面板会连续分批识别（每批 40 页）直到全部完成，过程中可以点「停止」；识别完可以在 **知识** 页看到新生成的分块。
+5. 上传扫描件时，页面会以「待识别」入库：批量导入默认顺带识别；也可以单独在 **内容** 页点「识别扫描页」，它会创建一个后台识别任务连续分批跑到完成，进度同样在 **任务** 页，随时可以取消；识别完可以在 **知识** 页看到新生成的分块。
 6. 在普通对话里也可以直接问，助手会先检索知识库再回答，并引用出处；遇到待识别的扫描件它会先调用 `kb_ocr`。
 
 ### 扫描件识别用的是什么
@@ -101,6 +106,7 @@ git clone https://github.com/LazyZou/dsh_knowledge_base.git
 ```
 pdfkb/
 ├── index.json           # 文档清单与统计（含待识别页数）
+├── jobs.json            # 后台任务队列与进度（最近 20 个）
 ├── docs/<id>.json       # 单篇文档：逐页正文 + 识别出的文字 + 知识分块
 ├── docs/<id>/p1.png     # 扫描页的页面图像（原始分辨率，识别与预览用）
 │   └── p1.vision.png    # 供视觉模型使用的缩小副本（装了 Tesseract 时不生成）
@@ -117,6 +123,7 @@ pdfkb/
 - **文本清理**：Tesseract 输出的中文会在字间插空格，识别后会把汉字之间、以及汉字与中文标点之间的空格去掉，并把夹在中文之间的半角标点转成全角，避免影响分词与检索。
 - **分块**：约 900 字符一块、120 字符重叠，按页记录来源；识别出的页文字与原生文字一样参与分块。
 - **检索**：BM25（`k1=1.2`、`b=0.75`），对英文按词、对中文按单字加二元组分词。
+- **后台任务**：`lib/jobs.mjs` 把批量导入与扫描件识别记录成持久化任务（`jobs.json`），宿主进程用一个串行队列逐个处理：文件先流式落盘，再解析入库；任务状态、每份文件的结果都写盘，刷新页面或重启 DSH 后仍能看到，并在重启时把中断的任务重新排队。
 - **回答**：抽取式——命中覆盖度低于阈值（0.34）时直接判定「缺少相应知识」，否则从命中最高的片段里挑出与问题最相关的句子并标注出处。面板内的问答不调用大模型，因此离线可用、结果可复现；需要更强的组织性回答时，在对话里问助手（它拿到同样的检索结果再组织语言）。
 
 ## 已知限制
@@ -134,12 +141,13 @@ pdfkb/
 
 ```
 pdf-kb/
-├── index.js            # Host：/api/pdfkb/* 路由、6 个工具、系统提示
+├── index.js            # Host：/api/pdfkb/* 路由、8 个工具、系统提示
 ├── client.js           # Client：侧边栏入口 + 主面板页面
 ├── cordis.patch.yml    # bundle patch（一行 insert）
 ├── lib/pdf.mjs         # PDF 文本抽取 + 页面图像
 ├── lib/ocr.mjs         # 扫描页识别（Tesseract / 视觉工具）
 ├── lib/store.mjs       # 分块 + BM25 检索 + 落盘
+├── lib/jobs.mjs        # 后台任务队列（批量导入 / 扫描件识别）
 ├── locale/{zh,en}.json # 插件显示名与说明
 ├── docs/DETAIL.md      # Plugins 页里的详情文档
 └── icon.svg
@@ -149,7 +157,7 @@ pdf-kb/
 
 ## English
 
-A DeepSeek Harness plugin that turns PDFs into a local knowledge base: upload documents in a sidebar panel, inspect the extracted text and knowledge chunks, ask questions answered with citations, and let the chat assistant search the same library through `kb_search` / `kb_documents` / `kb_read_document` / `kb_add_document` / `kb_remove_document`. Parsing is done in-process in pure JavaScript (no network, no external service). Install from the Plugins page with the repository URL or a local checkout path.
+A DeepSeek Harness plugin that turns PDFs into a local knowledge base: upload documents in a sidebar panel, inspect the extracted text and knowledge chunks, ask questions answered with citations, and let the chat assistant search the same library through `kb_search` / `kb_documents` / `kb_read_document` / `kb_add_document` / `kb_import` / `kb_ocr` / `kb_jobs` / `kb_remove_document`. Batch imports and scan recognition run as persistent background jobs with visible progress. Parsing is done in-process in pure JavaScript (no network, no external service). Install from the Plugins page with the repository URL or a local checkout path.
 
 ## License
 

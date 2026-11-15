@@ -20,7 +20,9 @@ window.__ModuleLoader__.load({
       title: 'PDF 知识库',
       subtitle: '上传 PDF，让文档里的知识可以被检索和提问',
       upload: '上传 PDF',
+      uploadMany: '批量上传 PDF',
       uploading: '正在解析…',
+      uploadProgress: '正在发送 {name}（{n}/{m}，{p}%）',
       documents: '文档',
       emptyTitle: '知识库还是空的',
       emptyBody: '上传一份 PDF，解析后就能在这里查看内容、浏览知识条目，并基于它提问。',
@@ -29,6 +31,27 @@ window.__ModuleLoader__.load({
       tabContent: '内容',
       tabKnowledge: '知识',
       tabAsk: '提问',
+      tabTasks: '任务',
+      tabTasksBusy: '任务 {n}',
+      jobsEmpty: '还没有后台任务。批量上传 PDF 或识别扫描件后，进度会显示在这里。',
+      jobProgress: '{done}/{total} 个文件',
+      jobPages: '{n}/{m} 页',
+      jobFailedCount: '{n} 个失败',
+      jobCancel: '取消',
+      jobDismiss: '清除',
+      jobOpen: '打开',
+      jobState_queued: '排队中',
+      jobState_running: '进行中',
+      jobState_done: '已完成',
+      jobState_failed: '失败',
+      jobState_cancelled: '已取消',
+      jobItem_pending: '等待上传',
+      jobItem_uploaded: '已收到',
+      jobItem_running: '处理中',
+      jobItem_done: '已完成',
+      jobItem_failed: '失败',
+      jobItem_cancelled: '已取消',
+      ocrQueued: '已加入后台识别队列，可以关掉这个页面，进度在「任务」里看。',
       delete: '删除',
       deleteConfirm: '删除《{title}》？该文档的知识条目会一并移除。',
       pages: '{n} 页',
@@ -81,7 +104,9 @@ window.__ModuleLoader__.load({
       title: 'PDF library',
       subtitle: 'Upload PDFs and turn their content into knowledge you can browse and ask about',
       upload: 'Upload PDF',
+      uploadMany: 'Upload PDFs',
       uploading: 'Parsing…',
+      uploadProgress: 'Sending {name} ({n}/{m}, {p}%)',
       documents: 'Documents',
       emptyTitle: 'The library is empty',
       emptyBody: 'Upload a PDF to read its content here, browse the knowledge chunks extracted from it, and ask questions about it.',
@@ -90,6 +115,27 @@ window.__ModuleLoader__.load({
       tabContent: 'Content',
       tabKnowledge: 'Knowledge',
       tabAsk: 'Ask',
+      tabTasks: 'Tasks',
+      tabTasksBusy: 'Tasks {n}',
+      jobsEmpty: 'No background jobs yet. Batch uploads and scan recognition show their progress here.',
+      jobProgress: '{done}/{total} files',
+      jobPages: '{n}/{m} pages',
+      jobFailedCount: '{n} failed',
+      jobCancel: 'Cancel',
+      jobDismiss: 'Dismiss',
+      jobOpen: 'Open',
+      jobState_queued: 'Queued',
+      jobState_running: 'Running',
+      jobState_done: 'Done',
+      jobState_failed: 'Failed',
+      jobState_cancelled: 'Cancelled',
+      jobItem_pending: 'Waiting to upload',
+      jobItem_uploaded: 'Received',
+      jobItem_running: 'Processing',
+      jobItem_done: 'Done',
+      jobItem_failed: 'Failed',
+      jobItem_cancelled: 'Cancelled',
+      ocrQueued: 'Queued for background recognition — you can close this page and watch progress under Tasks.',
       delete: 'Delete',
       deleteConfirm: 'Delete "{title}"? Its knowledge chunks are removed too.',
       pages: '{n} pages',
@@ -221,6 +267,30 @@ window.__ModuleLoader__.load({
         border:2px dashed var(--dsw-alias-brand-primary); border-radius:12px; font-size:14px;
         color: var(--dsw-alias-label-primary); pointer-events:none; }
       .pdfkb-scroll-hint { font-size:11px; color: var(--dsw-alias-label-caption); }
+      .pdfkb-tasks { display:flex; flex-direction:column; gap:10px; }
+      .pdfkb-task { border:1px solid var(--dsw-alias-border-l2); border-radius:10px;
+        background: var(--dsw-alias-bg-layer-1); padding:12px 14px; display:flex; flex-direction:column; gap:8px; }
+      .pdfkb-task-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+      .pdfkb-task-title { font-size:13px; font-weight:600; color: var(--dsw-alias-label-primary);
+        overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .pdfkb-task-state { font-size:11px; color: var(--dsw-alias-label-tertiary); flex:none; }
+      .pdfkb-task[data-state="done"] .pdfkb-task-state { color: var(--dsw-alias-brand-primary); }
+      .pdfkb-task[data-state="failed"] .pdfkb-task-state { color: var(--dsw-alias-state-error-primary); }
+      .pdfkb-bar { height:6px; border-radius:999px; background: var(--dsw-alias-bg-layer-3); overflow:hidden; }
+      .pdfkb-bar-fill { height:100%; border-radius:999px; background: var(--dsw-alias-brand-primary);
+        transition: width .3s ease; }
+      .pdfkb-task-meta { display:flex; align-items:center; gap:10px; font-size:12px;
+        color: var(--dsw-alias-label-secondary); }
+      .pdfkb-task-meta > span:first-child { flex:1; }
+      .pdfkb-task-bad { color: var(--dsw-alias-state-error-primary); }
+      .pdfkb-task-items { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px;
+        max-height:180px; overflow:auto; }
+      .pdfkb-task-item { display:flex; align-items:center; justify-content:space-between; gap:10px;
+        font-size:12px; color: var(--dsw-alias-label-secondary); }
+      .pdfkb-task-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .pdfkb-task-item-state { flex:none; color: var(--dsw-alias-label-tertiary); }
+      .pdfkb-link { background:none; border:none; padding:0; font:inherit; cursor:pointer;
+        color: var(--dsw-alias-brand-primary); }
       @media (max-width: 860px) {
         .pdfkb-body { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 34%) minmax(0,1fr); }
       }
@@ -243,6 +313,35 @@ window.__ModuleLoader__.load({
         return { ok: false, code: 'KB_ERROR', message: error?.message ?? 'network error' }
       }
     }
+
+    /**
+     * Send one file of an import job. fetch() cannot report upload progress, so
+     * the panel uses XHR here: a 500 MB PDF takes long enough that a silent
+     * button looks broken.
+     */
+    const sendFile = (suffix, file, onProgress) =>
+      new Promise(resolve => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', new URL(`api/pdfkb${suffix}`, document.baseURI).href)
+        xhr.withCredentials = true
+        xhr.setRequestHeader('content-type', 'application/pdf')
+        xhr.upload.onprogress = event => {
+          if (event.lengthComputable && event.total) onProgress(event.loaded / event.total)
+        }
+        xhr.onload = () => {
+          onProgress(1)
+          try {
+            resolve(JSON.parse(xhr.responseText))
+          } catch {
+            resolve({ ok: false, code: 'KB_ERROR', message: `HTTP ${xhr.status}` })
+          }
+        }
+        xhr.onerror = () => resolve({ ok: false, code: 'KB_ERROR', message: 'network error' })
+        xhr.onabort = () => resolve({ ok: false, code: 'KB_CANCELLED', message: 'upload cancelled' })
+        xhr.send(file)
+      })
+
+    const FINISHED = new Set(['done', 'failed', 'cancelled'])
 
     function PanelIcon({ size }) {
       const dimension = typeof size === 'number' ? size : 18
@@ -443,6 +542,78 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** Background jobs: what was queued, what is done, and what failed. */
+    function TasksPane({ jobs, t, onCancel, onDismiss, onOpen }) {
+      if (!jobs.length) return h('p', { className: 'pdfkb-empty' }, t('jobsEmpty'))
+      return h(
+        'div',
+        { className: 'pdfkb-tasks' },
+        jobs.map(job => {
+          const progress = job.progress ?? { total: job.total, done: job.done, ratio: 0 }
+          const active = !FINISHED.has(job.state)
+          const percent = Math.round(Math.min(1, Math.max(0, Number(progress.ratio) || 0)) * 100)
+          return h(
+            'article',
+            { key: job.id, className: 'pdfkb-task', 'data-state': job.state },
+            h(
+              'div',
+              { className: 'pdfkb-task-head' },
+              h('span', { className: 'pdfkb-task-title', title: job.title }, job.title),
+              h('span', { className: 'pdfkb-task-state' }, t(`jobState_${job.state}`)),
+            ),
+            h('div', { className: 'pdfkb-bar' }, h('div', { className: 'pdfkb-bar-fill', style: { width: `${percent}%` } })),
+            h(
+              'div',
+              { className: 'pdfkb-task-meta' },
+              h(
+                'span',
+                null,
+                job.kind === 'ocr'
+                  ? format(t('jobPages'), { n: progress.done, m: progress.total })
+                  : format(t('jobProgress'), { done: progress.done, total: progress.total }),
+              ),
+              job.failed ? h('span', { className: 'pdfkb-task-bad' }, format(t('jobFailedCount'), { n: job.failed })) : null,
+              h(
+                'button',
+                {
+                  className: 'pdfkb-btn pdfkb-btn-quiet',
+                  type: 'button',
+                  onClick: () => (active ? onCancel(job.id) : onDismiss(job.id)),
+                },
+                active ? t('jobCancel') : t('jobDismiss'),
+              ),
+            ),
+            job.items.length > 1
+              ? h(
+                  'ul',
+                  { className: 'pdfkb-task-items' },
+                  job.items.map(item =>
+                    h(
+                      'li',
+                      { key: item.index, className: 'pdfkb-task-item' },
+                      h('span', { className: 'pdfkb-task-name', title: item.name }, item.name),
+                      h(
+                        'span',
+                        { className: 'pdfkb-task-item-state' },
+                        item.state === 'done' && item.documentId
+                          ? h(
+                              'button',
+                              { className: 'pdfkb-link', type: 'button', onClick: () => onOpen(item.documentId) },
+                              t('jobOpen'),
+                            )
+                          : item.error
+                            ? h('span', { className: 'pdfkb-task-bad', title: item.error }, t(`jobItem_${item.state}`))
+                            : t(`jobItem_${item.state}`),
+                      ),
+                    ),
+                  ),
+                )
+              : null,
+          )
+        }),
+      )
+    }
+
     function PanelPage({ t }) {
       const [documents, setDocuments] = useState([])
       const [totals, setTotals] = useState({ documents: 0, pages: 0, chunks: 0 })
@@ -450,17 +621,16 @@ window.__ModuleLoader__.load({
       const [detail, setDetail] = useState(undefined)
       const [tab, setTab] = useState('content')
       const [loading, setLoading] = useState(true)
-      const [uploading, setUploading] = useState(false)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
       const [question, setQuestion] = useState('')
       const [result, setResult] = useState(undefined)
       const [asking, setAsking] = useState(false)
       const [dragging, setDragging] = useState(false)
-      const [ocrBusy, setOcrBusy] = useState(false)
+      const [jobs, setJobs] = useState([])
+      const [uploadState, setUploadState] = useState(undefined)
       const [ocrInfo, setOcrInfo] = useState(undefined)
       const inputRef = useRef(null)
-      const ocrStopRef = useRef(false)
 
       const describe = useCallback(
         body => {
@@ -501,34 +671,66 @@ window.__ModuleLoader__.load({
         void loadState()
       }, [loadState])
 
+      const loadJobs = useCallback(async () => {
+        const body = await call('/jobs')
+        if (body.ok) setJobs(body.jobs ?? [])
+        return body
+      }, [])
+
+      useEffect(() => {
+        void loadJobs()
+        // Poll while the panel is open: jobs keep running Host-side, so the list
+        // has to catch up on work that finished after the tab was hidden.
+        const timer = setInterval(() => {
+          void loadJobs().then(body => {
+            if (!body?.active) void loadState()
+          })
+        }, 2500)
+        return () => clearInterval(timer)
+      }, [loadJobs, loadState])
+
       useEffect(() => {
         if (!selected && documents.length) void loadDocument(documents[0].id)
       }, [documents, selected, loadDocument])
 
       const upload = useCallback(
-        async file => {
-          if (!file) return
-          setUploading(true)
+        async fileList => {
+          const files = Array.from(fileList ?? []).filter(file => file && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)))
+          if (!files.length) return
           setError('')
           setNotice('')
-          const body = await call(`/upload?name=${encodeURIComponent(file.name)}`, {
+          setTab('tasks')
+          const created = await call('/jobs/import', {
             method: 'POST',
-            headers: { 'content-type': 'application/pdf' },
-            body: file,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              files: files.map(file => ({ name: file.name, size: file.size })),
+              autoOcr: true,
+            }),
           })
-          setUploading(false)
-          if (!body.ok) {
-            setError(describe(body))
+          if (!created.ok || !created.job) {
+            setError(describe(created))
             return
           }
-          if (body.document?.duplicate) {
-            setNotice(format(t('alreadyInLibrary'), { title: body.document.title }))
+          const job = created.job
+          setJobs(previous => [job, ...previous])
+          for (const [index, file] of files.entries()) {
+            setUploadState({ index, total: files.length, name: file.name, ratio: 0 })
+            const body = await sendFile(
+              `/job-file?job=${encodeURIComponent(job.id)}&index=${index}&name=${encodeURIComponent(file.name)}`,
+              file,
+              ratio => setUploadState(current => (current && current.index === index ? { ...current, ratio } : current)),
+            )
+            if (!body.ok) {
+              setError(describe(body))
+              break
+            }
           }
+          setUploadState(undefined)
+          await loadJobs()
           await loadState()
-          void loadDocument(body.document.id)
-          setTab('content')
         },
-        [describe, loadState, loadDocument],
+        [describe, loadJobs, loadState],
       )
 
       const remove = useCallback(
@@ -551,53 +753,57 @@ window.__ModuleLoader__.load({
         [describe, loadState, t],
       )
 
-      const runOcr = useCallback(
+      const uploading = Boolean(uploadState)
+      const activeJobs = jobs.filter(job => !FINISHED.has(job.state))
+      const ocrBusy = Boolean(
+        detail && jobs.some(job => job.kind === 'ocr' && !FINISHED.has(job.state) && job.items[0]?.documentId === detail.id),
+      )
+
+      /** Hand a whole scan to the Host queue: recognition outlives the panel. */
+      const queueOcr = useCallback(
         async doc => {
-          if (!doc?.id || ocrBusy) return
-          ocrStopRef.current = false
-          setOcrBusy(true)
+          if (!doc?.id) return
           setError('')
-          setNotice(t('ocrRunning'))
-          // Keep taking batches until the document is done: a 400-page scan is
-          // dozens of batches, and nobody wants to click 40 times.
-          let recognized = 0
-          let remaining = Number(doc.ocrPending) || 0
-          try {
-            while (!ocrStopRef.current) {
-              const body = await call('/ocr', {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ id: doc.id, pages: 40 }),
-              })
-              if (!body.ok) {
-                setError(describe(body))
-                return
-              }
-              recognized += Number(body.recognized) || 0
-              remaining = Number(body.remaining) || 0
-              const failedPage = (body.pages ?? []).find(item => item.error)
-              if (failedPage) {
-                const code = failedPage.code ?? /^([A-Z_]+)/.exec(failedPage.error)?.[1]
-                setError(describe({ code, message: failedPage.error }))
-                break
-              }
-              setNotice(
-                remaining === 0 ? t('ocrComplete') : format(t('ocrResult'), { n: recognized, m: remaining }),
-              )
-              if (remaining === 0) break
-              await loadState()
-              await loadDocument(doc.id)
-            }
-            if (ocrStopRef.current && remaining > 0) {
-              setNotice(format(t('ocrStopped'), { m: remaining }))
-            }
-          } finally {
-            setOcrBusy(false)
-            await loadState()
-            await loadDocument(doc.id)
+          const body = await call('/jobs/ocr', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: doc.id }),
+          })
+          if (!body.ok) {
+            setError(describe(body))
+            return
           }
+          setNotice(body.job ? t('ocrQueued') : t('ocrComplete'))
+          setTab('tasks')
+          await loadJobs()
         },
-        [describe, loadState, loadDocument, t, ocrBusy, ocrStopRef],
+        [describe, loadJobs, t],
+      )
+
+      const cancelJob = useCallback(
+        async id => {
+          const body = await call('/job-cancel', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id }),
+          })
+          if (!body.ok) setError(describe(body))
+          await loadJobs()
+        },
+        [describe, loadJobs],
+      )
+
+      const dismissJob = useCallback(
+        async id => {
+          const body = await call('/job-delete', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id }),
+          })
+          if (!body.ok) setError(describe(body))
+          await loadJobs()
+        },
+        [describe, loadJobs],
       )
 
       const ask = useCallback(async () => {
@@ -629,8 +835,8 @@ window.__ModuleLoader__.load({
         onDrop: event => {
           event.preventDefault()
           setDragging(false)
-          const file = event.dataTransfer?.files?.[0]
-          if (file) void upload(file)
+          const dropped = event.dataTransfer?.files
+          if (dropped && dropped.length) void upload(dropped)
         },
       }
 
@@ -676,17 +882,18 @@ window.__ModuleLoader__.load({
                 disabled: uploading,
                 onClick: () => inputRef.current?.click(),
               },
-              uploading ? t('uploading') : t('upload'),
+              uploading ? t('uploading') : t('uploadMany'),
             ),
             h('input', {
               ref: inputRef,
               type: 'file',
               accept: 'application/pdf,.pdf',
+              multiple: true,
               style: { display: 'none' },
               onChange: event => {
-                const file = event.target.files?.[0]
+                const picked = event.target.files
                 event.target.value = ''
-                void upload(file)
+                void upload(picked)
               },
             }),
           ),
@@ -694,6 +901,18 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'pdfkb-error', style: { marginTop: '10px' } }, error) : null,
         !error && notice
           ? h('p', { className: 'pdfkb-notice', style: { marginTop: '10px' } }, notice)
+          : null,
+        uploadState
+          ? h(
+              'p',
+              { className: 'pdfkb-notice', style: { marginTop: '10px' } },
+              format(t('uploadProgress'), {
+                name: uploadState.name,
+                n: uploadState.index + 1,
+                m: uploadState.total,
+                p: Math.round(uploadState.ratio * 100),
+              }),
+            )
           : null,
         h(
           'div',
@@ -716,67 +935,78 @@ window.__ModuleLoader__.load({
           h(
             'main',
             { className: 'pdfkb-main' },
-            documents.length
-              ? h(
-                  React.Fragment,
-                  null,
-                  h(
-                    'nav',
-                    { className: 'pdfkb-tabs' },
-                    [
-                      ['content', t('tabContent')],
-                      ['knowledge', t('tabKnowledge')],
-                      ['ask', t('tabAsk')],
-                    ].map(([id, label]) =>
-                      h(
-                        'button',
-                        {
-                          key: id,
-                          className: 'pdfkb-tab',
-                          'data-active': tab === id ? 'true' : 'false',
-                          type: 'button',
-                          onClick: () => setTab(id),
-                        },
-                        label,
-                      ),
-                    ),
-                  ),
-                  h(
-                    'section',
-                    { className: 'pdfkb-pane' },
-                    tab === 'ask'
-                      ? h(AskPane, { t, onAsk: () => void ask(), asking, result, error: '', question, setQuestion })
-                      : detail
-                        ? tab === 'content'
-                          ? h(ContentPane, {
-                              detail,
-                              t,
-                              onOcr: doc => void runOcr(doc),
-                              onStopOcr: () => {
-                                ocrStopRef.current = true
-                              },
-                              ocrBusy,
-                            })
-                          : h(KnowledgePane, { detail, t })
-                        : h(
-                            'div',
-                            { className: 'pdfkb-empty' },
-                            h('h2', null, t('noSelection')),
-                            h('p', null, t('noSelectionBody')),
-                          ),
-                  ),
-                )
-              : h(
-                  'div',
-                  { className: 'pdfkb-empty' },
-                  h('h2', null, loading ? '…' : t('emptyTitle')),
-                  h('p', null, t('emptyBody')),
-                  h(
-                    'button',
-                    { className: 'pdfkb-btn pdfkb-btn-primary', type: 'button', onClick: () => inputRef.current?.click() },
-                    t('upload'),
-                  ),
+            h(
+              'nav',
+              { className: 'pdfkb-tabs' },
+              [
+                ['content', t('tabContent')],
+                ['knowledge', t('tabKnowledge')],
+                ['ask', t('tabAsk')],
+                ['tasks', activeJobs.length ? format(t('tabTasksBusy'), { n: activeJobs.length }) : t('tabTasks')],
+              ].map(([id, label]) =>
+                h(
+                  'button',
+                  {
+                    key: id,
+                    className: 'pdfkb-tab',
+                    'data-active': tab === id ? 'true' : 'false',
+                    type: 'button',
+                    onClick: () => setTab(id),
+                  },
+                  label,
                 ),
+              ),
+            ),
+            h(
+              'section',
+              { className: 'pdfkb-pane' },
+              tab === 'tasks'
+                ? h(TasksPane, {
+                    jobs,
+                    t,
+                    onCancel: id => void cancelJob(id),
+                    onDismiss: id => void dismissJob(id),
+                    onOpen: id => {
+                      setTab('content')
+                      void loadDocument(id)
+                    },
+                  })
+                : tab === 'ask'
+                  ? h(AskPane, { t, onAsk: () => void ask(), asking, result, error: '', question, setQuestion })
+                  : documents.length
+                    ? detail
+                      ? tab === 'content'
+                        ? h(ContentPane, {
+                            detail,
+                            t,
+                            onOcr: doc => void queueOcr(doc),
+                            onStopOcr: () => {
+                              const job = jobs.find(
+                                entry => entry.kind === 'ocr' && !FINISHED.has(entry.state) && entry.items[0]?.documentId === detail.id,
+                              )
+                              if (job) void cancelJob(job.id)
+                            },
+                            ocrBusy,
+                          })
+                        : h(KnowledgePane, { detail, t })
+                      : h(
+                          'div',
+                          { className: 'pdfkb-empty' },
+                          h('h2', null, t('noSelection')),
+                          h('p', null, t('noSelectionBody')),
+                        )
+                    : h(
+                        'div',
+                        { className: 'pdfkb-empty' },
+                        h('h2', null, loading ? '…' : t('emptyTitle')),
+                        h('p', null, t('emptyBody')),
+                        h(
+                          'button',
+                          { className: 'pdfkb-btn pdfkb-btn-primary', type: 'button', onClick: () => inputRef.current?.click() },
+                          t('uploadMany'),
+                        ),
+                      ),
+            ),
           ),
         ),
         dragging ? h('div', { className: 'pdfkb-drop' }, t('dropHint')) : null,

@@ -24,6 +24,17 @@ window.__ModuleLoader__.load({
       uploading: '正在解析…',
       uploadProgress: '正在发送 {name}（{n}/{m}，{p}%）',
       documents: '文档',
+      newGroup: '新建分组',
+      groupNamePrompt: '分组名称',
+      groupRenamePrompt: '重命名分组',
+      groupDeleteConfirm: '删除分组「{name}」？里面的文档会移到「未分组」。',
+      groupUngrouped: '未分组',
+      groupDelete: '删除分组',
+      groupRename: '重命名',
+      groupMoveTo: '移动到分组',
+      groupCount: '{n} 份',
+      groupEmpty: '这个分组还没有文档',
+      groupAll: '全部',
       emptyTitle: '知识库还是空的',
       emptyBody: '上传一份 PDF，解析后就能在这里查看内容、浏览知识条目，并基于它提问。',
       dropHint: '把 PDF 拖到这里',
@@ -119,6 +130,17 @@ window.__ModuleLoader__.load({
       uploading: 'Parsing…',
       uploadProgress: 'Sending {name} ({n}/{m}, {p}%)',
       documents: 'Documents',
+      newGroup: 'New group',
+      groupNamePrompt: 'Group name',
+      groupRenamePrompt: 'Rename group',
+      groupDeleteConfirm: 'Delete the group "{name}"? Its documents move to Ungrouped.',
+      groupUngrouped: 'Ungrouped',
+      groupDelete: 'Delete group',
+      groupRename: 'Rename',
+      groupMoveTo: 'Move to group',
+      groupCount: '{n}',
+      groupEmpty: 'This group has no documents yet',
+      groupAll: 'All',
       emptyTitle: 'The library is empty',
       emptyBody: 'Upload a PDF to read its content here, browse the knowledge chunks extracted from it, and ask questions about it.',
       dropHint: 'Drop a PDF here',
@@ -229,6 +251,28 @@ window.__ModuleLoader__.load({
       .pdfkb-list { min-height:0; display:flex; flex-direction:column; gap:8px; overflow:auto; padding-right:2px; }
       .pdfkb-list-title { font-size:12px; font-weight:600; color: var(--dsw-alias-label-tertiary);
         text-transform:uppercase; letter-spacing:.06em; padding:0 2px 2px; }
+      .pdfkb-list-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+      .pdfkb-group-new { border:1px solid var(--dsw-alias-border-l2); background:transparent;
+        color: var(--dsw-alias-label-secondary); border-radius:8px; padding:3px 8px; font-size:11px;
+        cursor:pointer; font-family:inherit; white-space:nowrap; }
+      .pdfkb-group-new:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+      .pdfkb-group { display:flex; flex-direction:column; gap:6px; }
+      .pdfkb-group-head { display:flex; align-items:center; gap:2px; }
+      .pdfkb-group-toggle { flex:1; min-width:0; display:flex; align-items:center; gap:6px; border:0;
+        background:transparent; color: var(--dsw-alias-label-secondary); font-family:inherit; font-size:12px;
+        font-weight:600; cursor:pointer; padding:4px; border-radius:6px; text-align:left; }
+      .pdfkb-group-toggle:hover { background: var(--dsw-alias-interactive-bg-hover); }
+      .pdfkb-group-caret { color: var(--dsw-alias-label-tertiary); font-size:10px; }
+      .pdfkb-group-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .pdfkb-group-count { color: var(--dsw-alias-label-tertiary); font-weight:500; }
+      .pdfkb-group-act { border:0; background:transparent; color: var(--dsw-alias-label-tertiary); cursor:pointer;
+        border-radius:6px; padding:2px 5px; font-size:11px; opacity:0; }
+      .pdfkb-group-head:hover .pdfkb-group-act { opacity:1; }
+      .pdfkb-group-act:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+      .pdfkb-group-empty { margin:0 0 4px 18px; font-size:11px; color: var(--dsw-alias-label-tertiary); }
+      .pdfkb-doc-group { margin-top:4px; width:100%; font-family:inherit; font-size:11px;
+        color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1);
+        border:1px solid var(--dsw-alias-border-l2); border-radius:6px; padding:2px 4px; cursor:pointer; }
       .pdfkb-doc { position:relative; display:flex; flex-direction:column; gap:2px; text-align:left;
         border:1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2); border-radius:10px;
         padding:9px 11px; cursor:pointer; color:inherit; font-family:inherit; }
@@ -395,7 +439,7 @@ window.__ModuleLoader__.load({
     }
 
     /** One document row in the left list. */
-    function DocumentRow({ doc, active, t, onSelect, onDelete }) {
+    function DocumentRow({ doc, active, t, groups, onSelect, onDelete, onGroup }) {
       return h(
         'div',
         {
@@ -417,6 +461,24 @@ window.__ModuleLoader__.load({
           { className: 'pdfkb-doc-meta' },
           `${format(t('pages'), { n: doc.pageCount })} · ${format(t('chunks'), { n: doc.chunkCount })}`
             + (doc.ocrPending ? ` · ${format(t('ocrPending'), { n: doc.ocrPending })}` : ''),
+        ),
+        h(
+          'select',
+          {
+            className: 'pdfkb-doc-group',
+            value: doc.group || '',
+            title: t('groupMoveTo'),
+            'aria-label': t('groupMoveTo'),
+            onClick: event => event.stopPropagation(),
+            onChange: event => {
+              event.stopPropagation()
+              onGroup(doc, event.target.value)
+            },
+          },
+          [
+            h('option', { key: '', value: '' }, t('groupUngrouped')),
+            ...groups.map(group => h('option', { key: group.id, value: group.id }, group.name)),
+          ],
         ),
         h(
           'button',
@@ -741,6 +803,8 @@ window.__ModuleLoader__.load({
       const [asking, setAsking] = useState(false)
       const [dragging, setDragging] = useState(false)
       const [jobs, setJobs] = useState([])
+      const [groups, setGroups] = useState([])
+      const [collapsedGroups, setCollapsedGroups] = useState({})
       const [uploadState, setUploadState] = useState(undefined)
       const [ocrInfo, setOcrInfo] = useState(undefined)
       const inputRef = useRef(null)
@@ -759,6 +823,7 @@ window.__ModuleLoader__.load({
         const body = await call('/state')
         if (body.ok) {
           setDocuments(body.documents ?? [])
+          setGroups(body.groups ?? [])
           setTotals(body.totals ?? { documents: 0, pages: 0, chunks: 0, topics: 0 })
           if (body.ocr) setOcrInfo(body.ocr)
           setError('')
@@ -813,6 +878,50 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!selected && documents.length) void loadDocument(documents[0].id)
       }, [documents, selected, loadDocument])
+
+      const postJson = useCallback(
+        async (suffix, payload) => {
+          const body = await call(suffix, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload ?? {}),
+          })
+          if (!body.ok) setError(describe(body))
+          await loadState()
+          return body
+        },
+        [describe, loadState],
+      )
+
+      const createGroup = useCallback(async () => {
+        const name = window.prompt(t('groupNamePrompt'), '')
+        if (!name || !name.trim()) return
+        await postJson('/group-create', { name })
+      }, [postJson, t])
+
+      const renameGroup = useCallback(
+        async group => {
+          const name = window.prompt(t('groupRenamePrompt'), group.name)
+          if (!name || !name.trim()) return
+          await postJson('/group-rename', { id: group.id, name })
+        },
+        [postJson, t],
+      )
+
+      const deleteGroup = useCallback(
+        async group => {
+          if (!window.confirm(format(t('groupDeleteConfirm'), { name: group.name }))) return
+          await postJson('/group-delete', { id: group.id })
+        },
+        [postJson, t],
+      )
+
+      const assignGroup = useCallback(
+        async (doc, groupId) => {
+          await postJson('/group-assign', { document: doc.id, group: groupId })
+        },
+        [postJson],
+      )
 
       const upload = useCallback(
         async fileList => {
@@ -1052,17 +1161,106 @@ window.__ModuleLoader__.load({
           h(
             'aside',
             { className: 'pdfkb-list' },
-            h('span', { className: 'pdfkb-list-title' }, t('documents')),
-            documents.map(doc =>
-              h(DocumentRow, {
-                key: doc.id,
-                doc,
-                active: doc.id === selected,
-                t,
-                onSelect: id => void loadDocument(id),
-                onDelete: row => void remove(row),
-              }),
+            h(
+              'div',
+              { className: 'pdfkb-list-head' },
+              h('span', { className: 'pdfkb-list-title' }, t('documents')),
+              h(
+                'button',
+                {
+                  className: 'pdfkb-group-new',
+                  type: 'button',
+                  title: t('newGroup'),
+                  onClick: () => void createGroup(),
+                },
+                `+ ${t('newGroup')}`,
+              ),
             ),
+            [
+              ...groups.map(group => ({
+                key: group.id,
+                id: group.id,
+                name: group.name,
+                group,
+                docs: documents.filter(doc => doc.group === group.id),
+              })),
+              {
+                key: '',
+                id: '',
+                name: t('groupUngrouped'),
+                group: undefined,
+                docs: documents.filter(doc => !doc.group),
+              },
+            ]
+              .filter(section => section.id || section.docs.length || !documents.length)
+              .map(section => {
+                const open = !collapsedGroups[section.key || '__ungrouped']
+                const toggle = () =>
+                  setCollapsedGroups(previous => ({
+                    ...previous,
+                    [section.key || '__ungrouped']: !previous[section.key || '__ungrouped'],
+                  }))
+                return h(
+                  'section',
+                  { className: 'pdfkb-group', key: section.key || 'ungrouped' },
+                  h(
+                    'div',
+                    { className: 'pdfkb-group-head' },
+                    h(
+                      'button',
+                      {
+                        className: 'pdfkb-group-toggle',
+                        type: 'button',
+                        'aria-expanded': open ? 'true' : 'false',
+                        onClick: toggle,
+                      },
+                      h('span', { className: 'pdfkb-group-caret' }, open ? '▾' : '▸'),
+                      h('span', { className: 'pdfkb-group-name', title: section.name }, section.name),
+                      h('span', { className: 'pdfkb-group-count' }, format(t('groupCount'), { n: section.docs.length })),
+                    ),
+                    section.group
+                      ? h(
+                          'button',
+                          {
+                            className: 'pdfkb-group-act',
+                            type: 'button',
+                            title: t('groupRename'),
+                            onClick: () => void renameGroup(section.group),
+                          },
+                          '✎',
+                        )
+                      : null,
+                    section.group
+                      ? h(
+                          'button',
+                          {
+                            className: 'pdfkb-group-act',
+                            type: 'button',
+                            title: t('groupDelete'),
+                            onClick: () => void deleteGroup(section.group),
+                          },
+                          '🗑',
+                        )
+                      : null,
+                  ),
+                  open
+                    ? section.docs.length
+                      ? section.docs.map(doc =>
+                          h(DocumentRow, {
+                            key: doc.id,
+                            doc,
+                            active: doc.id === selected,
+                            t,
+                            groups,
+                            onSelect: id => void loadDocument(id),
+                            onDelete: row => void remove(row),
+                            onGroup: (row, groupId) => void assignGroup(row, groupId),
+                          }),
+                        )
+                      : h('p', { className: 'pdfkb-group-empty' }, t('groupEmpty'))
+                    : null,
+                )
+              }),
           ),
           h(
             'main',

@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "PDF 知识库",
-    "description": "上传 PDF（可批量、含扫描件），按主题查看解析出的知识与正文，OCR 后即可检索提问；批量导入在后台排队并显示进度。",
+    "description": "上传 PDF（可批量、可分组、含扫描件），按主题查看解析出的知识与正文；单文件最大 500 MB。",
     "detail": "docs/DETAIL.md"
   }
 }

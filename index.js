@@ -400,10 +400,12 @@ export function apply(ctx, config) {
   route('/state', ['GET'], 'buffered', async () => {
     try {
       const documents = await kb.list()
+      const groups = await kb.listGroups()
       const tesseract = await probeTesseract(tesseractPath)
       return json({
         ok: true,
         documents,
+        groups,
         totals: {
           documents: documents.length,
           pages: documents.reduce((sum, doc) => sum + (doc.pageCount ?? 0), 0),
@@ -469,6 +471,55 @@ export function apply(ctx, config) {
       return json({ ok: removed })
     } catch (error) {
       return json(failure(error), 400)
+    }
+  })
+
+  route('/group-create', ['POST'], 'buffered', async request => {
+    try {
+      const body = await request.json().catch(() => ({}))
+      const group = await kb.createGroup(body?.name)
+      return json({ ok: true, group, groups: await kb.listGroups() })
+    } catch (error) {
+      const failed = failure(error)
+      return json(failed, failed.code === 'KB_BAD_REQUEST' ? 400 : 500)
+    }
+  })
+
+  route('/group-rename', ['POST'], 'buffered', async request => {
+    try {
+      const body = await request.json().catch(() => ({}))
+      await kb.renameGroup(String(body?.id ?? ''), body?.name)
+      return json({ ok: true, groups: await kb.listGroups() })
+    } catch (error) {
+      const failed = failure(error)
+      return json(failed, failed.code === 'KB_BAD_REQUEST' ? 400 : 404)
+    }
+  })
+
+  route('/group-delete', ['POST'], 'buffered', async request => {
+    try {
+      const body = await request.json().catch(() => ({}))
+      const result = await kb.deleteGroup(String(body?.id ?? ''))
+      return json({ ok: true, ...result, groups: await kb.listGroups(), documents: await kb.list() })
+    } catch (error) {
+      return json(failure(error), 404)
+    }
+  })
+
+  route('/group-assign', ['POST'], 'buffered', async request => {
+    try {
+      const body = await request.json().catch(() => ({}))
+      const documents = await kb.list()
+      const wanted = String(body?.document ?? '').trim()
+      const matched = matchDocument(documents, wanted)
+      if (!matched) {
+        return json({ ok: false, code: 'KB_NO_DOCUMENT', message: `no document matches "${wanted}"` }, 404)
+      }
+      const document = await kb.assignGroup(matched.id, String(body?.group ?? ''))
+      return json({ ok: true, document, groups: await kb.listGroups() })
+    } catch (error) {
+      const failed = failure(error)
+      return json(failed, failed.code === 'KB_NO_GROUP' ? 404 : 400)
     }
   })
 
@@ -769,6 +820,72 @@ export function apply(ctx, config) {
   ctx.effect(
     () =>
       ctx.tools.register({
+        name: 'kb_groups',
+        description:
+          'List the user\'s document groups with the PDFs inside each one. Documents that were never filed appear as '
+          + 'ungrouped. Use it when the user asks how their library is organised, or before moving a document so you '
+          + 'know which groups already exist.',
+        parameters: {},
+        output: { schema: {}, render: renderJson },
+        isConcurrencySafe: () => true,
+        async execute() {
+          const [groups, documents] = await Promise.all([kb.listGroups(), kb.list()])
+          return {
+            ok: true,
+            groups: groups.map(group => ({
+              group: group.name,
+              id: group.id,
+              documents: documents.filter(doc => doc.group === group.id).map(doc => doc.title),
+            })),
+            ungrouped: documents.filter(doc => !doc.group).map(doc => doc.title),
+          }
+        },
+      }),
+    'pdf-kb: kb_groups tool',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.tools.register({
+        name: 'kb_move_document',
+        description:
+          'Move one PDF into a document group, or take it out of its group. A group name that does not exist yet is '
+          + 'created. Use it when the user asks to file, group, or ungroup an uploaded PDF.',
+        parameters: {
+          document: { type: 'string', required: true, description: 'Document title or id from kb_documents.' },
+          group: {
+            type: 'string',
+            required: true,
+            description: 'Group name to file the document under; an empty string removes it from its group.',
+          },
+        },
+        output: { schema: {}, render: renderJson },
+        isConcurrencySafe: () => true,
+        async execute(args) {
+          const wanted = String(args?.document ?? '').trim()
+          const documents = await kb.list()
+          const meta = matchDocument(documents, wanted)
+          if (!meta) {
+            return { ok: false, error: `no document matches "${wanted}"`, documents: documents.map(doc => doc.title) }
+          }
+          const name = String(args?.group ?? '').trim()
+          if (!name) {
+            const cleared = await kb.assignGroup(meta.id, '')
+            return { ok: true, document: cleared.title, group: '', message: 'the document is ungrouped again' }
+          }
+          const groups = await kb.listGroups()
+          const found = groups.find(item => item.name.toLowerCase() === name.toLowerCase())
+          const group = found ?? (await kb.createGroup(name))
+          await kb.assignGroup(meta.id, group.id)
+          return { ok: true, document: meta.title, group: group.name, created: !found }
+        },
+      }),
+    'pdf-kb: kb_move_document tool',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.tools.register({
         name: 'kb_documents',
         description:
           'List every document stored in the user\'s PDF knowledge base with its title, page count, topic count, chunk count, '
@@ -1047,10 +1164,12 @@ export function apply(ctx, config) {
       interpolate: false,
       text:
         'The user keeps a PDF knowledge base, reachable through the kb_search, kb_documents, kb_topics, and '
-        + 'kb_read_document tools, and maintained through kb_add_document, kb_import, kb_ocr, kb_jobs, and '
-        + 'kb_remove_document. When a question could be answered from their documents, search that library first and '
-        + 'cite the document title and page you used. kb_topics shows how one document is grouped by section when you '
-        + 'need to orient in a long book. Documents listed with a non-zero `ocrPending` are scans whose pages have no '
+        + 'kb_read_document tools, and maintained through kb_add_document, kb_import, kb_ocr, kb_jobs, kb_groups, '
+        + 'kb_move_document, and kb_remove_document. When a question could be answered from their documents, search '
+        + 'that library first and cite the document title and page you used. kb_topics shows how one document is '
+        + 'grouped by section when you need to orient in a long book; kb_groups shows the groups the user filed '
+        + 'documents into, and kb_move_document files a document into one. Documents listed with a non-zero '
+        + '`ocrPending` are scans whose pages have no '
         + 'text yet: call kb_ocr for them before concluding the library lacks the answer. Importing several PDFs is a '
         + 'background job: start it with kb_import and follow it with kb_jobs instead of waiting inside one call. If '
         + 'the search returns nothing relevant, tell the user the knowledge base does not contain that knowledge, and '

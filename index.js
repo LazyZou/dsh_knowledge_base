@@ -200,6 +200,9 @@ export function apply(ctx, config) {
   const jobStore = new JobStore(dataDir)
   let jobsReady
   let jobRunning = false
+  // The job the runner is inside right now: a cancel can finalize a queued job
+  // immediately, but a running one has to be stopped by the runner itself.
+  let activeJob = null
 
   const fileExists = async target => {
     try {
@@ -316,6 +319,7 @@ export function apply(ctx, config) {
           .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))[0]
         if (!job) break
         job.state = 'running'
+        activeJob = job
         await jobStore.touch(job)
         for (const item of [...job.items].sort((a, b) => a.index - b.index)) {
           if (settled(item)) continue
@@ -342,6 +346,7 @@ export function apply(ctx, config) {
     } catch {
       // A queue failure must never take the route down; items keep their state.
     } finally {
+      activeJob = null
       jobRunning = false
     }
   }
@@ -527,6 +532,11 @@ export function apply(ctx, config) {
       if (!job) return json({ ok: false, code: 'KB_BAD_REQUEST', message: 'unknown job' }, 404)
       const item = job.items.find(entry => entry.index === index)
       if (!item) return json({ ok: false, code: 'KB_BAD_REQUEST', message: 'unknown file' }, 404)
+      // A cancelled batch keeps receiving files from the browser until it notices, so
+      // refuse them instead of resurrecting a row the user already stopped.
+      if (job.cancelRequested || item.state === 'cancelled') {
+        return json({ ok: false, code: 'KB_CANCELLED', message: 'the job was cancelled' }, 409)
+      }
       if (name) item.name = name
       temp = path.join(tempDir, `job-${job.id}-${item.index}.pdf`)
       const spooled = await spoolUpload(request, tempDir, temp)
@@ -573,8 +583,21 @@ export function apply(ctx, config) {
       const body = await request.json().catch(() => ({}))
       const job = jobStore.get(String(body?.id ?? ''))
       if (!job) return json({ ok: false, code: 'KB_BAD_REQUEST', message: 'unknown job' }, 404)
+      if (TERMINAL.has(job.state)) return json({ ok: true, job: jobView(job) })
       job.cancelRequested = true
-      await jobStore.touch(job)
+      const running = jobRunning && activeJob === job
+      // Everything the runner has not picked up can stop right now; the item it is
+      // inside finishes on its own and the runner then closes the job out.
+      for (const item of job.items) {
+        if (settled(item) || (running && item.state === 'running')) continue
+        item.state = 'cancelled'
+      }
+      if (running) {
+        job.state = 'cancelling'
+        await jobStore.touch(job)
+      } else {
+        await finishJob(job)
+      }
       kickJobs()
       return json({ ok: true, job: jobView(job) })
     } catch (error) {

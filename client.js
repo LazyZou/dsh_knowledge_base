@@ -45,6 +45,7 @@ window.__ModuleLoader__.load({
       jobState_done: '已完成',
       jobState_failed: '失败',
       jobState_cancelled: '已取消',
+      jobState_cancelling: '正在取消…',
       jobItem_pending: '等待上传',
       jobItem_uploaded: '已收到',
       jobItem_running: '处理中',
@@ -130,6 +131,7 @@ window.__ModuleLoader__.load({
       jobState_done: 'Done',
       jobState_failed: 'Failed',
       jobState_cancelled: 'Cancelled',
+      jobState_cancelling: 'Cancelling…',
       jobItem_pending: 'Waiting to upload',
       jobItem_uploaded: 'Received',
       jobItem_running: 'Processing',
@@ -580,9 +582,13 @@ window.__ModuleLoader__.load({
                 {
                   className: 'pdfkb-btn pdfkb-btn-quiet',
                   type: 'button',
+                  // While the runner is inside the job the request is recorded but the
+                  // work only stops at the next checkpoint, so say so instead of repeating
+                  // an apparently dead click.
+                  disabled: job.state === 'cancelling',
                   onClick: () => (active ? onCancel(job.id) : onDismiss(job.id)),
                 },
-                active ? t('jobCancel') : t('jobDismiss'),
+                job.state === 'cancelling' ? t('jobState_cancelling') : active ? t('jobCancel') : t('jobDismiss'),
               ),
             ),
             job.items.length > 1
@@ -737,6 +743,9 @@ window.__ModuleLoader__.load({
               ratio => setUploadState(current => (current && current.index === index ? { ...current, ratio } : current)),
             )
             if (!body.ok) {
+              // A cancel from the task list lands here: stop uploading quietly rather
+              // than reporting a failure the user caused on purpose.
+              if (body.code === 'KB_CANCELLED') break
               setError(describe(body))
               break
             }

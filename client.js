@@ -546,7 +546,7 @@ window.__ModuleLoader__.load({
           const body = await call('/ocr', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: doc.id, pages: 6 }),
+            body: JSON.stringify({ id: doc.id, pages: 20 }),
           })
           setOcrBusy(false)
           if (!body.ok) {

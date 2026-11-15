@@ -70,10 +70,17 @@ git clone https://github.com/LazyZou/dsh_knowledge_base.git
 
 按「本机优先、模型兜底」两级：
 
-1. 装了 **Tesseract** 就直接调用本机二进制（不消耗 token、不联网），自动探测常见安装路径，并优先用 `chi_sim+eng`。
+1. 装了 **Tesseract** 就直接调用本机二进制（不消耗 token、不联网），自动探测常见安装路径，并优先用 `chi_sim+eng`。中文扫描件需要 `chi_sim` 语言包：
+
+   ```bat
+   :: Windows：装完 Tesseract 后把 chi_sim.traineddata 放进 tessdata
+   :: https://github.com/tesseract-ocr/tessdata/blob/main/chi_sim.traineddata
+   copy chi_sim.traineddata "C:\Program Files\Tesseract-OCR\tessdata\"
+   ```
+
 2. 没装 Tesseract 时，调用视觉插件提供的 `vision_ocr` 工具，由视觉模型识别页面图像（会消耗 token）。
 
-两种都没有时会明确报「没有可用的识别后端」，不会把空结果写入知识库。为了省成本，只识别没有文字层的页；页面图像保存前缩到 1600 像素宽（文字仍清晰，视觉模型的图像 token 大幅减少）；识别结果落盘缓存；同一文档里完全相同的页面只识别一次；每次调用只处理有限页数。
+两种都没有时会明确报「没有可用的识别后端」，不会把空结果写入知识库。为了省钱又准：只识别没有文字层的页；本机 Tesseract 用原始分辨率（字形更清楚、中文错字更少），同一个页面另存一份缩到 1600 像素宽的副本专供视觉模型（图像 token 约为原图四分之一）；识别结果落盘缓存；同一文档里完全相同的页面只识别一次；多页并行识别（默认 4 路，可调），每次调用只处理有限页数。
 
 ### 解析失败怎么办
 
@@ -95,7 +102,8 @@ git clone https://github.com/LazyZou/dsh_knowledge_base.git
 pdfkb/
 ├── index.json           # 文档清单与统计（含待识别页数）
 ├── docs/<id>.json       # 单篇文档：逐页正文 + 识别出的文字 + 知识分块
-├── docs/<id>/p1.jpg     # 扫描页的页面图像（预览与识别用）
+├── docs/<id>/p1.png     # 扫描页的页面图像（原始分辨率，识别与预览用）
+│   └── p1.vision.png    # 供视觉模型使用的缩小副本（装了 Tesseract 时不生成）
 └── tmp/                 # 上传暂存，处理完即删除
 ```
 
@@ -104,8 +112,9 @@ pdfkb/
 ## 解析与检索是怎么做的
 
 - **PDF 解析**：`lib/pdf.mjs`，纯 JS + Node 内置 `crypto`/`zlib`。支持交叉引用表与对象流（ObjStm）、跨页继承的资源字典、Form XObject 递归、`Tj`/`TJ`/`'`/`"` 文本操作符、ToUnicode CMap（含 `bfchar`/`bfrange`）、Identity-H 双字节编码、WinAnsiEncoding，以及 Standard handler 空口令下的 RC4 与 AES-128 解密。
-- **页面图像**：解析时顺带记录每页最大的图像 XObject；DCTDecode 直接取出原始 JPEG，8 位灰度/彩色 FlateDecode 用 zlib 重新编码为 PNG，只对没有文字层的页落盘。
-- **OCR**：`lib/ocr.mjs`，先试本机 Tesseract（`chi_sim+eng`，超时可中断），再用 `vision_ocr` 工具走视觉模型；都不可用时返回 `OCR_UNAVAILABLE`。
+- **页面图像**：解析时顺带记录每页最大的图像 XObject；DCTDecode 直接取出原始 JPEG，8 位灰度/彩色 FlateDecode 与 CCITT G3/G4 传真编码（扫描件最常见）用 zlib 重新编码为 PNG，只对没有文字层的页落盘。
+- **OCR**：`lib/ocr.mjs`，先试本机 Tesseract（`chi_sim+eng`，原始分辨率，超时可中断），再用 `vision_ocr` 工具走视觉模型（1600 像素宽的副本）；都不可用时返回 `OCR_UNAVAILABLE`。多页并行识别，默认 4 路。
+- **文本清理**：Tesseract 输出的中文会在字间插空格，识别后会把汉字之间、以及汉字与中文标点之间的空格去掉，并把夹在中文之间的半角标点转成全角，避免影响分词与检索。
 - **分块**：约 900 字符一块、120 字符重叠，按页记录来源；识别出的页文字与原生文字一样参与分块。
 - **检索**：BM25（`k1=1.2`、`b=0.75`），对英文按词、对中文按单字加二元组分词。
 - **回答**：抽取式——命中覆盖度低于阈值（0.34）时直接判定「缺少相应知识」，否则从命中最高的片段里挑出与问题最相关的句子并标注出处。面板内的问答不调用大模型，因此离线可用、结果可复现；需要更强的组织性回答时，在对话里问助手（它拿到同样的检索结果再组织语言）。

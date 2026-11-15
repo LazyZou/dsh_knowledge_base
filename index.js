@@ -29,6 +29,8 @@ const MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 const MAX_UPLOAD_LABEL = '500 MB'
 /** Pages recognized per OCR call when the caller does not choose. */
 const DEFAULT_OCR_PAGES = 6
+/** Pages recognized in parallel; local OCR is CPU bound and nothing is shared. */
+const DEFAULT_OCR_CONCURRENCY = 4
 
 /** JSON response helper. */
 function json(data, status = 200) {
@@ -110,11 +112,13 @@ export function apply(ctx, config) {
   const ocrEngine = ['auto', 'tesseract', 'vision'].includes(options.ocrEngine) ? options.ocrEngine : 'auto'
   const tesseractPath = typeof options.tesseractPath === 'string' ? options.tesseractPath : undefined
   const pagesPerRun = Math.max(1, Math.min(40, Number(options.pagesPerRun) || DEFAULT_OCR_PAGES))
+  const ocrConcurrency = Math.max(1, Math.min(8, Number(options.concurrency) || DEFAULT_OCR_CONCURRENCY))
 
   /**
    * Recognize up to `pages` pending pages of one document.
    * Identical page images share one recognition result, so a scan that repeats a
-   * header page never pays for it twice.
+   * header page never pays for it twice. Pages are recognized by a small worker
+   * pool because a local Tesseract run is CPU bound and leaves cores idle.
    */
   async function recognizeDocument(id, requested) {
     const limit = Math.max(1, Math.min(40, Number(requested) || pagesPerRun))
@@ -123,46 +127,68 @@ export function apply(ctx, config) {
       const document = await kb.document(id)
       return { ok: true, recognized: 0, failed: 0, empty: 0, remaining: document.ocrPending, pages: [], done: true }
     }
-    const reused = new Map()
+    const digests = await Promise.all(queue.map(item => hashFile(item.path).catch(() => undefined)))
+    const groups = new Map()
+    queue.forEach((item, index) => {
+      const key = digests[index] ?? `page:${item.page}`
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key).push(item)
+    })
     const pages = []
     let recognized = 0
     let failed = 0
     let empty = 0
     let stopped = false
-    for (const item of queue) {
-      if (stopped) break
-      const digest = await hashFile(item.path).catch(() => undefined)
-      if (digest && reused.has(digest)) {
-        const cached = reused.get(digest)
-        await kb.applyOcr(id, item.page, cached.text, `${cached.engine}:reused`)
-        pages.push({ page: item.page, chars: cached.text.length, engine: `${cached.engine}:reused` })
-        if (cached.text) recognized += 1
-        else empty += 1
-        continue
-      }
+    const workers = new Array(Math.max(1, Math.min(ocrConcurrency, groups.size))).fill(0)
+    const targets = [...groups.values()]
+    const outcomes = []
+    let cursor = 0
+    const runOne = async group => {
+      const item = group[0]
       try {
         const result = await recognizePageImage(ctx, {
           imagePath: item.path,
+          visionImagePath: item.visionPath,
           engine: ocrEngine,
           tesseractPath,
         })
         // A "no text on this page" answer must not become page content.
         const text = stripNonTextAnswer(result.text)
         const engine = text ? result.engine : `${String(result.engine).split(':')[0]}:none`
-        if (digest) reused.set(digest, { text, engine })
-        await kb.applyOcr(id, item.page, text, engine)
-        pages.push({ page: item.page, chars: text.length, engine })
-        if (text) recognized += 1
-        else empty += 1
+        outcomes.push({ group, text, engine })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        await kb.failOcr(id, item.page, message).catch(() => {})
-        pages.push({ page: item.page, error: message, code: ocrErrorCode(message) })
-        failed += 1
+        outcomes.push({ group, error: message, code: ocrErrorCode(message) })
         // No usable backend: stop instead of failing every remaining page.
         if (/^OCR_UNAVAILABLE/.test(message)) stopped = true
       }
     }
+    await Promise.all(workers.map(async () => {
+      while (!stopped) {
+        const index = cursor++
+        if (index >= targets.length) return
+        await runOne(targets[index])
+      }
+    }))
+    // Apply sequentially: applyOcr rewrites the whole document file.
+    for (const outcome of outcomes) {
+      if (outcome.error) {
+        for (const page of outcome.group) {
+          await kb.failOcr(id, page.page, outcome.error).catch(() => {})
+          pages.push({ page: page.page, error: outcome.error, code: outcome.code })
+        }
+        failed += outcome.group.length
+        continue
+      }
+      for (const page of outcome.group) {
+        const engine = page === outcome.group[0] ? outcome.engine : `${outcome.engine}:reused`
+        await kb.applyOcr(id, page.page, outcome.text, engine)
+        pages.push({ page: page.page, chars: outcome.text.length, engine })
+      }
+      if (outcome.text) recognized += outcome.group.length
+      else empty += outcome.group.length
+    }
+    pages.sort((a, b) => a.page - b.page)
     const document = await kb.document(id)
     return { ok: true, recognized, failed, empty, remaining: document.ocrPending, pages, done: document.ocrPending === 0 }
   }

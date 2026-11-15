@@ -745,7 +745,7 @@ window.__ModuleLoader__.load({
           await loadJobs()
           await loadState()
         },
-        [describe, loadJobs, loadState],
+        [describe, loadJobs, loadState, t],
       )
 
       const remove = useCallback(
